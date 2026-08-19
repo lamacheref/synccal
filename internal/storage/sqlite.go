@@ -11,6 +11,12 @@ type Store struct {
 	db *sql.DB
 }
 
+type CalendarState struct {
+	CTag      string
+	SyncToken string
+	ETag      string
+}
+
 func New(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -43,6 +49,14 @@ func (s *Store) migrate() error {
 		PRIMARY KEY (source_uid, dest_name)
 	);
 	CREATE INDEX IF NOT EXISTS idx_event_mapping_dest ON event_mapping(dest_name, dest_uid);
+
+	CREATE TABLE IF NOT EXISTS source_state (
+		source_url TEXT PRIMARY KEY,
+		ctag TEXT,
+		sync_token TEXT,
+		etag TEXT,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := s.db.Exec(schema)
 	return err
@@ -95,6 +109,34 @@ func (s *Store) ListMappings(destName string) (map[string]string, error) {
 		m[sourceUID] = hash
 	}
 	return m, nil
+}
+
+func (s *Store) GetSourceState(sourceURL string) (*CalendarState, error) {
+	var state CalendarState
+	err := s.db.QueryRow(
+		`SELECT ctag, sync_token, etag FROM source_state WHERE source_url = ?`,
+		sourceURL,
+	).Scan(&state.CTag, &state.SyncToken, &state.ETag)
+	if err == sql.ErrNoRows {
+		return &CalendarState{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (s *Store) SetSourceState(sourceURL string, state *CalendarState) error {
+	_, err := s.db.Exec(`
+		INSERT INTO source_state (source_url, ctag, sync_token, etag)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(source_url) DO UPDATE SET
+			ctag = excluded.ctag,
+			sync_token = excluded.sync_token,
+			etag = excluded.etag,
+			updated_at = CURRENT_TIMESTAMP
+	`, sourceURL, state.CTag, state.SyncToken, state.ETag)
+	return err
 }
 
 func (s *Store) Close() error {

@@ -58,10 +58,37 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	start := time.Now()
 	s.log.Info("Starting sync")
 
-	icsData, etag, err := s.source.FetchCalendar(ctx)
+	sourceState, err := s.store.GetSourceState(s.cfg.Source.URL)
+	if err != nil {
+		s.log.Warnw("Failed to get source state", "error", err)
+		sourceState = &storage.CalendarState{}
+	}
+
+	changed, newSourceState, err := s.source.HasChanged(ctx, sourceState)
+	if err != nil {
+		metrics.SyncErrors.WithLabelValues("source", "check_change").Inc()
+		return fmt.Errorf("check source changes: %w", err)
+	}
+
+	if !changed {
+		s.log.Info("Source unchanged, skipping sync")
+		return nil
+	}
+
+	s.log.Infow("Source changed, fetching events",
+		"ctag_changed", sourceState.CTag != newSourceState.CTag,
+		"sync_token_changed", sourceState.SyncToken != newSourceState.SyncToken,
+	)
+
+	syncToken := newSourceState.SyncToken
+	icsData, fetchedState, err := s.source.FetchCalendar(ctx, syncToken)
 	if err != nil {
 		metrics.SyncErrors.WithLabelValues("source", "fetch").Inc()
 		return fmt.Errorf("fetch source: %w", err)
+	}
+
+	if err := s.store.SetSourceState(s.cfg.Source.URL, fetchedState); err != nil {
+		s.log.Warnw("Failed to save source state", "error", err)
 	}
 
 	events, err := parseEvents(icsData, s.cfg.Sync.FilterPrivate)

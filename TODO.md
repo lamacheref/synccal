@@ -7,6 +7,8 @@
 - [ ] Sync bidirectionnelle optionnelle
 - [ ] Filtres par catégorie / mots-clés
 - [ ] Tests de charge / benchmark
+- [ ] Filtrage événements PRIVATE/CONFIDENTIAL (exclure ou masquer détails)
+- [ ] Architecture plugin : connecteurs source/destination + transformateurs événements
 
 ## Sprint 1 - MVP Core (Semaine 1-2)
 - [ ] Parser config YAML (sources, destinations, scheduling)

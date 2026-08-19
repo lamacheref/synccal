@@ -11,6 +11,8 @@ Synchroniser un calendrier vers un ou plusieurs autres dans nextcloud et carboni
 - Le calendrier d'arrivée peut se trouver sur un compte avec login et mot de passe, 
 - On préférera toujours un token à un mot de passe de compte (carbonio ou nextcloud le font.)
 - Une interface graphique web, simple, Material Design clair (pas de mode sombre) pour gérer le produit.
+- Filtrage des événements marqués "PRIVATE" / "CONFIDENTIAL" (exclusion ou masquage détails)
+- Architecture plugin pour les connecteurs (source/destination) et transformateurs d'événements
 
 ## Analyse
 

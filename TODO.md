@@ -27,16 +27,32 @@
 - [ ] **Assets embarqués** : fichiers statiques intégrés au binaire Go (embed), pas de CDN requis
 - [ ] **Tests UI** : tests des endpoints API + smoke test de la page
 
-## Sprint 4 - Production Ready
+## Sprint 4 - Multi-sources (BASE du projet)
+- [ ] **Config** : `source` devient une liste `sources` (chacune publique OU authentifiée par token / mot de passe d'application)
+- [ ] **Clients source par source** : public (GET .ics + ETag) ou authentifié (REPORT calendar-query)
+- [ ] **État de sync par source** : CTag / sync-token stockés par source (table `source_state` keyée par URL)
+- [ ] **Préfixage UID par hash de source** : éviter les conflits si le même événement existe sur plusieurs sources
+- [ ] **Sync multi-sources** : boucle sur toutes les sources → toutes les destinations
+- [ ] **Métriques par source** : duration, events, erreurs, last_sync par source
+- [ ] **Tests d'intégration multi-sources** : 2 sources (1 publique + 1 authentifiée) → 1 destination
+
+## Sprint 5 - Architecture Plugin (PRINCIPE du projet)
+- [ ] **Définir les interfaces Go** : `SourceConnector`, `DestinationConnector`, `EventTransformer`
+- [ ] **Core CalDAV en plugin intégré** : Nextcloud/Carbonio comme connecteurs CalDAV par défaut
+- [ ] **Registry plugins** : chargement/découverte des plugins (config par plugin, aucun changement core requis)
+- [ ] **Event transformers** : pipeline de transformation (masquage détails PRIVATE, mapping catégories, renommage)
+- [ ] **Config par plugin** : `plugin` dans la config YAML (type, options)
+- [ ] **Interface web** : gestion des plugins dans l'UI (activation, options)
+- [ ] **Tests plugins** : tests unitaires + intégration sur chaque connecteur/transformateur
+
+## Sprint 6 - Production Ready
 - [ ] Documentation déploiement (systemd, docker-compose, k8s)
 - [ ] Runbook ops (dépannage, rollback)
 
 ## Backlog (non priorisé)
-- [ ] Support multi-sources (plusieurs calendriers publics)
 - [ ] Notifications (email, webhook, ntfy) sur erreurs
 - [ ] Sync bidirectionnelle optionnelle
 - [ ] Filtres par catégorie / mots-clés
-- [ ] Architecture plugin : connecteurs source/destination + transformateurs événements
 - [ ] Support Carbonio dédié (tests d'intégration)
 - [ ] Tests de charge / benchmark
 

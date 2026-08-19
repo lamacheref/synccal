@@ -1,13 +1,13 @@
 # Analyse de Faisabilité - SyncCal
 
 ## Résumé du projet
-Synchronisation de calendrier CalDAV unidirectionnelle (source publique → destinations authentifiées) entre Nextcloud et Carbonio.
+Synchronisation de calendrier CalDAV unidirectionnelle (source publique **ou authentifiée** → destinations authentifiées) entre Nextcloud et Carbonio.
 
 ## Faisabilité Technique
 
 ### ✅ Points forts
 - **CalDAV standard** : Protocole bien documenté, bibliothèques existantes (Python: caldav, icalendar; Go: caldav-go; Node: caldav)
-- **Source publique sans auth** : Simplifie la lecture (GET simple sur l'URL .ics)
+- **Source flexible** : Support public (GET .ics) **et** authentifié (CalDAV REPORT calendar-query avec auth)
 - **Destinations avec tokens** : Nextcloud et Carbonio supportent les app passwords / tokens d'application
 - **Sync horaire** : Cron job ou systemd timer trivial à mettre en place
 - **Détection de changements** : ETag/Last-Modified sur le calendrier source, ou comparaison hash du contenu .ics

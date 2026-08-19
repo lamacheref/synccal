@@ -1,0 +1,40 @@
+# SyncCal Configuration Example
+# Copy to config.yaml and adjust
+
+# Source calendar (public, no auth required)
+source:
+  url: "https://example.com/calendar.ics"
+  # username: ""  # Optional if auth needed
+  # password: ""  # Optional if auth needed
+
+# Destination calendars (authenticated)
+destinations:
+  - name: "nextcloud-personal"
+    url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
+    username: "user"
+    password: "app-password-or-token"
+  # - name: "carbonio-work"
+  #   url: "https://mail.example.com/dav/calendars/user/work/"
+  #   username: "user@domain.com"
+  #   password: "app-password"
+
+# Database for UID mapping and state
+database:
+  path: "./data/synccal.db"
+
+# Sync configuration
+sync:
+  interval: "1h"          # Duration: 30m, 1h, 2h, etc.
+  # interval: "0"         # Disable scheduler (run once)
+  timeout: "5m"           # Max duration per sync run
+  batch_size: 100         # Events per batch
+  delete_mode: "soft"     # "soft" (mark deleted) | "hard" (purge)
+
+# Metrics & health
+metrics:
+  addr: ":8080"
+
+# Logging
+logging:
+  level: "info"           # debug, info, warn, error
+  format: "json"          # json, console

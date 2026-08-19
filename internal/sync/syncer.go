@@ -1,0 +1,187 @@
+package sync
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"hash"
+	"strings"
+	"time"
+
+	"github.com/emersion/go-ical"
+	"github.com/robfig/cron/v3"
+	"github.com/smiden/synccal/internal/caldav"
+	"github.com/smiden/synccal/internal/config"
+	"github.com/smiden/synccal/internal/storage"
+	"go.uber.org/zap"
+)
+
+type Syncer struct {
+	cfg         *config.Config
+	source      *caldav.Client
+	destinations []*caldav.Client
+	store       *storage.Store
+	log         *zap.SugaredLogger
+	scheduler   *cron.Cron
+}
+
+func New(cfg *config.Config, source *caldav.Client, dests []*caldav.Client, store *storage.Store, log *zap.SugaredLogger) *Syncer {
+	return &Syncer{
+		cfg:          cfg,
+		source:       source,
+		destinations: dests,
+		store:        store,
+		log:          log,
+	}
+}
+
+func (s *Syncer) Sync(ctx context.Context) error {
+	s.log.Info("Starting sync")
+
+	// Fetch source calendar
+	icsData, etag, err := s.source.FetchCalendar(ctx)
+	if err != nil {
+		return fmt.Errorf("fetch source: %w", err)
+	}
+
+	// Parse events
+	events, err := parseEvents(icsData)
+	if err != nil {
+		return fmt.Errorf("parse events: %w", err)
+	}
+
+	s.log.Infow("Fetched source events", "count", len(events))
+
+	// Sync to each destination
+	for i, dest := range s.destinations {
+		destName := s.cfg.Destinations[i].Name
+		if err := s.syncDestination(ctx, dest, destName, events); err != nil {
+			s.log.Errorw("Destination sync failed", "dest", destName, "error", err)
+			continue
+		}
+	}
+
+	s.log.Info("Sync completed")
+	return nil
+}
+
+func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destName string, events map[string][]byte) error {
+	// Get existing mappings
+	existing, err := s.store.ListMappings(destName)
+	if err != nil {
+		return fmt.Errorf("list mappings: %w", err)
+	}
+
+	seen := make(map[string]bool)
+
+	for uid, icsData := range events {
+		seen[uid] = true
+		hash := hashContent(icsData)
+
+		destUID, destHref, destETag, deleted, err := s.store.GetMapping(uid, destName)
+		if err != nil {
+			return err
+		}
+
+		if existingHash, ok := existing[uid]; ok && existingHash == hash && !deleted {
+			s.log.Debugw("Event unchanged", "uid", uid, "dest", destName)
+			continue
+		}
+
+		if destUID == "" {
+			// Create new
+			newHref, err := dest.CreateEvent(ctx, icsData)
+			if err != nil {
+				return fmt.Errorf("create event: %w", err)
+			}
+			if err := s.store.SetMapping(uid, destName, uid, newHref, "", hash, false); err != nil {
+				return err
+			}
+			s.log.Infow("Created event", "uid", uid, "dest", destName)
+		} else {
+			// Update existing
+			if err := dest.UpdateEvent(ctx, destHref, icsData, destETag); err != nil {
+				return fmt.Errorf("update event: %w", err)
+			}
+			if err := s.store.SetMapping(uid, destName, destUID, destHref, "", hash, false); err != nil {
+				return err
+			}
+			s.log.Infow("Updated event", "uid", uid, "dest", destName)
+		}
+	}
+
+	// Handle deletions (events in dest but not in source)
+	for sourceUID, existingHash := range existing {
+		if !seen[sourceUID] {
+			destUID, destHref, destETag, deleted, err := s.store.GetMapping(sourceUID, destName)
+			if err != nil || deleted {
+				continue
+			}
+			if s.cfg.Sync.DeleteMode == "hard" {
+				if err := dest.DeleteEvent(ctx, destHref, destETag); err != nil {
+					s.log.Errorw("Failed to delete event", "uid", sourceUID, "error", err)
+				}
+			}
+			if err := s.store.SetMapping(sourceUID, destName, destUID, destHref, destETag, existingHash, true); err != nil {
+				return err
+			}
+			s.log.Infow("Marked event deleted", "uid", sourceUID, "dest", destName)
+		}
+	}
+
+	return nil
+}
+
+func (s *Syncer) StartScheduler() {
+	if s.scheduler != nil {
+		return
+	}
+	s.scheduler = cron.New()
+	interval := s.cfg.Sync.IntervalDuration()
+	if interval > 0 {
+		s.scheduler.AddFunc("@every "+interval.String(), func() {
+			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Sync.TimeoutDuration())
+			defer cancel()
+			if err := s.Sync(ctx); err != nil {
+				s.log.Errorw("Scheduled sync failed", "error", err)
+			}
+		})
+		s.scheduler.Start()
+	}
+}
+
+func (s *Syncer) Stop() {
+	if s.scheduler != nil {
+		s.scheduler.Stop()
+	}
+}
+
+func parseEvents(data []byte) (map[string][]byte, error) {
+	cal, err := ical.NewDecoder(strings.NewReader(string(data))).Decode()
+	if err != nil {
+		return nil, err
+	}
+
+	events := make(map[string][]byte)
+	for _, comp := range cal.Children {
+		if comp.Name == "VEVENT" {
+			uid := comp.Props.Get("UID")
+			if uid == "" {
+				continue
+			}
+			// Re-encode single event
+			eventCal := ical.NewCalendar()
+			eventCal.Children = []*ical.Component{comp}
+			var buf strings.Builder
+			ical.NewEncoder(&buf).Encode(eventCal)
+			events[uid] = []byte(buf.String())
+		}
+	}
+	return events, nil
+}
+
+func hashContent(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}

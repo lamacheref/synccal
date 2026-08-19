@@ -10,6 +10,8 @@ require (
 	github.com/prometheus/client_golang v1.18.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/viper v1.18.2
+	github.com/testcontainers/testcontainers-go v0.25.0
+	github.com/testcontainers/testcontainers-go/modules/nextcloud v0.25.0
 	go.uber.org/zap v1.26.0
 	modernc.org/sqlite v1.28.0
 )

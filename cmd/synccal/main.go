@@ -65,10 +65,19 @@ func main() {
 	mux.HandleFunc("/healthz", healthHandler(syncer))
 	mux.HandleFunc("/readyz", readyHandler(syncer, store))
 
+	server := &http.Server{
+		Addr:         cfg.Metrics.Addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	serverErrCh := make(chan error, 1)
 	go func() {
 		log.Infow("Metrics/Health server starting", "addr", cfg.Metrics.Addr)
-		if err := http.ListenAndServe(cfg.Metrics.Addr, mux); err != nil {
-			log.Errorw("Metrics server failed", "error", err)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErrCh <- err
 		}
 	}()
 
@@ -85,19 +94,47 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+
+	select {
+	case sig := <-sigCh:
+		log.Infow("Signal received, initiating graceful shutdown", "signal", sig)
+	case err := <-serverErrCh:
+		log.Errorw("Server error, initiating shutdown", "error", err)
+	}
 
 	log.Info("Shutting down...")
 	syncer.Stop()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	select {
-	case <-shutdownCtx.Done():
-		log.Warn("Shutdown timeout exceeded")
-	case <-time.After(100 * time.Millisecond):
-		log.Info("Graceful shutdown complete")
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Errorw("HTTP server shutdown error", "error", err)
+	} else {
+		log.Info("HTTP server stopped")
+	}
+
+	waitForSyncCompletion(shutdownCtx, syncer, log)
+
+	log.Info("Graceful shutdown complete")
+}
+
+func waitForSyncCompletion(ctx context.Context, syncer *sync.Syncer, log *zap.SugaredLogger) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Warn("Shutdown timeout exceeded, forcing exit")
+			return
+		case <-ticker.C:
+			if !syncer.IsRunning() {
+				log.Info("Sync completed, safe to exit")
+				return
+			}
+			log.Debug("Waiting for sync to complete...")
+		}
 	}
 }
 

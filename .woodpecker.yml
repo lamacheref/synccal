@@ -1,0 +1,39 @@
+# Woodpecker CI for Gitea
+# Place at .woodpecker.yml in repo root
+
+pipeline:
+  # Lint & Test
+  lint-test:
+    image: golang:1.23-alpine
+    commands:
+      - apk add --no-cache git make
+      - go mod download
+      - golangci-lint run ./...
+      - go test -v -race -coverprofile=coverage.out ./...
+    when:
+      event: [push, pull_request]
+      branch: main
+
+  # Build & Push Docker Image (Gitea - NO version bump)
+  docker:
+    image: docker.io/plugins/docker:latest
+    settings:
+      registry: dockhand.example.com
+      username:
+        from_secret: DOCKHAND_USERNAME
+      password:
+        from_secret: DOCKHAND_PASSWORD
+      repo: dockhand.example.com/synccal
+      tags:
+        - latest
+        - main
+        - ${DRONE_COMMIT_SHA:0:8}
+      platforms: linux/amd64,linux/arm64
+      build_args:
+        - VERSION=${DRONE_COMMIT_SHA:0:8}
+    when:
+      event: push
+      branch: main
+
+# No version-bump job on Gitea - tags only created from GitHub
+# No release job on Gitea - releases only on GitHub

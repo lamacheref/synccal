@@ -1,42 +1,37 @@
 # TODO - SyncCal
 
+## Fait ✅
+- [x] Parser config YAML + validation (URLs, destinations, filtres)
+- [x] Client CalDAV lecture source publique (GET .ics + ETag) et authentifiée (REPORT calendar-query)
+- [x] Client CalDAV écriture destination (auth token/basic, PUT/DELETE)
+- [x] Mapping UID source → UID destination (SQLite + hash contenu)
+- [x] Logique sync : créer, maj, supprimer (soft/hard delete)
+- [x] Filtrage événements PRIVATE/CONFIDENTIAL (`filter_private`)
+- [x] Détection de changements CTag / sync-token (RFC 6578) + ETag
+- [x] Retry backoff exponentiel + jitter + respect Retry-After
+- [x] Cron/Timer horaire + lock anti-concurrence
+- [x] Healthcheck HTTP (/healthz, /readyz) + métriques Prometheus
+- [x] Logs JSON structurés + graceful shutdown (SIGTERM, attente sync)
+- [x] Tests unitaires (retry) + tests d'intégration (Testcontainers Nextcloud)
+- [x] CI/CD GitHub (bump version) + Gitea (build image), multi-arch amd64/arm64
+- [x] Dockerfile multi-stage, versioning auto-bumper M.m.f
+
+## Sprint 3 - Production Ready
+- [ ] Documentation déploiement (systemd, docker-compose, k8s)
+- [ ] Runbook ops (dépannage, rollback)
+- [ ] Interface web Material Design (light only) : dashboard, config, events, logs, déclenchement sync manuel
+
 ## Backlog (non priorisé)
 - [ ] Support multi-sources (plusieurs calendriers publics)
-- [ ] Interface web Material Design (light only) : dashboard, config, events, logs, déclenchement sync manuel
 - [ ] Notifications (email, webhook, ntfy) sur erreurs
 - [ ] Sync bidirectionnelle optionnelle
 - [ ] Filtres par catégorie / mots-clés
-- [ ] Tests de charge / benchmark
-- [ ] Filtrage événements PRIVATE/CONFIDENTIAL (exclure ou masquer détails)
 - [ ] Architecture plugin : connecteurs source/destination + transformateurs événements
-
-## Sprint 1 - MVP Core (Semaine 1-2)
-- [ ] Parser config YAML (sources, destinations, scheduling)
-- [ ] Client CalDAV lecture source publique (GET .ics + ETag)
-- [ ] Client CalDAV écriture destination (auth token/basic)
-- [ ] Mapping UID source → UID destination (SQLite)
-- [ ] Logique sync : créer, maj, supprimer (soft delete)
-- [ ] Gestion fuseaux horaires (UTC normalisé)
-- [ ] Cron/Timer horaire + lock anti-concurrence
-- [ ] Healthcheck HTTP (/healthz, /readyz)
-- [ ] Logs JSON structurés + niveau configurable
-
-## Sprint 2 - Robustesse & Multi-dest (Semaine 3-4)
-- [ ] Retry avec backoff exponentiel + jitter
-- [ ] Respect Retry-After / rate limiting
-- [ ] Support multiples destinations par source
-- [ ] Config validation au démarrage
-- [ ] Tests d'intégration (Testcontainers Nextcloud/Carbonio)
-- [ ] Métriques Prometheus (sync_duration, events_synced, errors_total)
-- [ ] Graceful shutdown (SIGTERM handling)
-
-## Sprint 3 - Production Ready (Semaine 5)
-- [ ] Build multi-arch Docker (amd64, arm64)
-- [ ] CI/CD pipeline complet
-- [ ] Documentation déploiement (systemd, docker-compose, k8s)
-- [ ] Runbook ops (dépannage, rollback)
-- [ ] Versioning auto-bumper configuré
+- [ ] Support Carbonio dédié (tests d'intégration)
+- [ ] Tests de charge / benchmark
 
 ## Bugs connus / Dette technique
 - [ ] Gestion événements récurrents complexes (RRULE, EXDATE)
 - [ ] Conflits UID si même événement dans 2 sources
+- [ ] Fuseaux horaires : normaliser en UTC, conserver TZID original (partiel)
+- [ ] Pagination CalDAV pour très gros volumes (REPORT streaming)

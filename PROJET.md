@@ -26,7 +26,7 @@ Synchronisation de calendrier CalDAV unidirectionnelle (source publique **ou aut
 - **Source flexible** : Support public (GET .ics) **et** authentifié (CalDAV REPORT calendar-query avec auth)
 - **Destinations avec tokens** : Nextcloud et Carbonio supportent les app passwords / tokens d'application
 - **Sync horaire** : Cron job ou systemd timer trivial à mettre en place
-- **Détection de changements** : ETag/Last-Modified sur le calendrier source, ou comparaison hash du contenu .ics
+- **Détection de changements** : CTag / sync-token (RFC 6578), ETag/Last-Modified, ou comparaison hash du contenu .ics
 
 #### ⚠️ Points d'attention
 | Risque | Mitigation |
@@ -37,11 +37,12 @@ Synchronisation de calendrier CalDAV unidirectionnelle (source publique **ou aut
 | Volumes importants | Pagination CalDAV (REPORT calendar-query), streaming |
 | Fuseaux horaires | Normaliser en UTC, conserver TZID original |
 
-#### 🔧 Choix techniques recommandés
-- **Langage** : Go (binaire unique, perf, concurrency native) ou Python (écosystème CalDAV mature)
+#### 🔧 Choix techniques
+- **Langage** : **Go** (décidé) — binaire statique unique (~10-15 Mo, pas de runtime), daemon long-running natif (scheduler, signaux, goroutines), concurrence pour le multi-destination (1 goroutine/dest), cross-compilation amd64/arm64 triviale, écosystème CalDAV mature (`emersion/go-ical`, `emersion/go-webdav/caldav`). Python était l'alternative (écosystème `caldav` mature, prototypage rapide) mais pénalisant pour le déploiement (runtime, image ~150 Mo).
 - **Architecture** : Worker unique, stateless, config YAML
-- **State** : Stockage local SQLite (mapping UID source → UID dest, hash dernier sync)
-- **Observabilité** : Logs structurés (JSON), métriques Prometheus, healthcheck HTTP
+- **State** : Stockage local SQLite (mapping UID source → UID dest, hash contenu, état source CTag/sync-token)
+- **Détection de changements** : CTag / sync-token (RFC 6578) prioritaire, repli ETag/hash si non supporté
+- **Observabilité** : Logs structurés (JSON), métriques Prometheus, healthcheck HTTP (/healthz, /readyz)
 
 ### Estimation
 - **MVP (1 source → 1 dest)** : ~2-3 semaines

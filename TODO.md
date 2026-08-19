@@ -16,10 +16,20 @@
 - [x] CI/CD GitHub (bump version) + Gitea (build image), multi-arch amd64/arm64
 - [x] Dockerfile multi-stage, versioning auto-bumper M.m.f
 
-## Sprint 3 - Production Ready
+## Sprint 3 - PRIORITÉ : Interface web (Material Design, light only)
+- [ ] **API REST backend** : endpoints status, config (sans mots de passe), events, logs, trigger sync
+- [ ] **Sécurité** : token d'accès à l'UI (config), pas d'exposition des mots de passe en clair
+- [ ] **Dashboard** : statut sync (source, intervalle, dernière sync), liste destinations + compteurs
+- [ ] **Configuration** : visualisation/édition source, destinations, intervalle, filtres
+- [ ] **Événements** : tableau des événements synchronisés (UID, hash, statut), filtre par destination
+- [ ] **Logs** : vue des logs structurés, filtre par niveau
+- [ ] **Actions** : bouton "Synchroniser maintenant"
+- [ ] **Assets embarqués** : fichiers statiques intégrés au binaire Go (embed), pas de CDN requis
+- [ ] **Tests UI** : tests des endpoints API + smoke test de la page
+
+## Sprint 4 - Production Ready
 - [ ] Documentation déploiement (systemd, docker-compose, k8s)
 - [ ] Runbook ops (dépannage, rollback)
-- [ ] Interface web Material Design (light only) : dashboard, config, events, logs, déclenchement sync manuel
 
 ## Backlog (non priorisé)
 - [ ] Support multi-sources (plusieurs calendriers publics)

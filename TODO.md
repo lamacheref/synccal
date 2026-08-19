@@ -2,7 +2,7 @@
 
 ## Backlog (non priorisé)
 - [ ] Support multi-sources (plusieurs calendriers publics)
-- [ ] Interface web de monitoring / dashboard
+- [ ] Interface web Material Design (light only) : dashboard, config, events, logs, déclenchement sync manuel
 - [ ] Notifications (email, webhook, ntfy) sur erreurs
 - [ ] Sync bidirectionnelle optionnelle
 - [ ] Filtres par catégorie / mots-clés

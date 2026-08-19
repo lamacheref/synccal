@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/spf13/viper"
@@ -33,10 +34,11 @@ type DatabaseConfig struct {
 }
 
 type SyncConfig struct {
-	Interval   string `mapstructure:"interval"`
-	Timeout    string `mapstructure:"timeout"`
-	BatchSize  int    `mapstructure:"batch_size"`
-	DeleteMode string `mapstructure:"delete_mode"`
+	Interval      string `mapstructure:"interval"`
+	Timeout       string `mapstructure:"timeout"`
+	BatchSize     int    `mapstructure:"batch_size"`
+	DeleteMode    string `mapstructure:"delete_mode"`
+	FilterPrivate bool   `mapstructure:"filter_private"`
 
 	intervalDur time.Duration
 	timeoutDur  time.Duration
@@ -97,6 +99,28 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Logging.Format == "" {
 		cfg.Logging.Format = "json"
+	}
+
+	// Validation
+	if cfg.Source.URL == "" {
+		return nil, fmt.Errorf("source.url is required")
+	}
+	if len(cfg.Destinations) == 0 {
+		return nil, fmt.Errorf("at least one destination is required")
+	}
+	for i, d := range cfg.Destinations {
+		if d.Name == "" {
+			return nil, fmt.Errorf("destination[%d].name is required", i)
+		}
+		if d.URL == "" {
+			return nil, fmt.Errorf("destination[%d].url is required", i)
+		}
+		if d.Username == "" || d.Password == "" {
+			return nil, fmt.Errorf("destination[%d] requires username and password (token)", i)
+		}
+	}
+	if cfg.Database.Path == "" {
+		return nil, fmt.Errorf("database.path is required")
 	}
 
 	return &cfg, nil

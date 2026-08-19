@@ -3,8 +3,9 @@ module github.com/smiden/synccal
 go 1.23
 
 require (
-	github.com/emersion/go-ical v0.0.0-20240101000000-000000000000
+	github.com/emersion/go-ical v2.0.0
 	github.com/emersion/go-vcard v0.0.0-20240101000000-000000000000
+	github.com/emersion/go-webdav/caldav v0.0.0-20231102152535-3b389650a6f2
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/prometheus/client_golang v1.18.0
 	github.com/robfig/cron/v3 v3.0.1

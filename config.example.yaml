@@ -30,11 +30,12 @@ database:
 
 # Sync configuration
 sync:
-  interval: "1h"          # Duration: 30m, 1h, 2h, etc.
-  # interval: "0"         # Disable scheduler (run once)
-  timeout: "5m"           # Max duration per sync run
-  batch_size: 100         # Events per batch
-  delete_mode: "soft"     # "soft" (mark deleted) | "hard" (purge)
+  interval: "1h"           # Duration: 30m, 1h, 2h, etc.
+  # interval: "0"          # Disable scheduler (run once)
+  timeout: "5m"            # Max duration per sync run
+  batch_size: 100          # Events per batch
+  delete_mode: "soft"      # "soft" (mark deleted) | "hard" (purge)
+  filter_private: true     # Exclude CLASS:PRIVATE/CONFIDENTIAL events
 
 # Metrics & health
 metrics:

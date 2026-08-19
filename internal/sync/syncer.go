@@ -5,25 +5,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"hash"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-ical"
 	"github.com/robfig/cron/v3"
 	"github.com/smiden/synccal/internal/caldav"
 	"github.com/smiden/synccal/internal/config"
+	"github.com/smiden/synccal/internal/metrics"
 	"github.com/smiden/synccal/internal/storage"
 	"go.uber.org/zap"
 )
 
 type Syncer struct {
-	cfg         *config.Config
-	source      *caldav.Client
+	cfg          *config.Config
+	source       *caldav.Client
 	destinations []*caldav.Client
-	store       *storage.Store
-	log         *zap.SugaredLogger
-	scheduler   *cron.Cron
+	store        *storage.Store
+	log          *zap.SugaredLogger
+	scheduler    *cron.Cron
+	mu           sync.Mutex
+	running      bool
 }
 
 func New(cfg *config.Config, source *caldav.Client, dests []*caldav.Client, store *storage.Store, log *zap.SugaredLogger) *Syncer {
@@ -37,40 +40,78 @@ func New(cfg *config.Config, source *caldav.Client, dests []*caldav.Client, stor
 }
 
 func (s *Syncer) Sync(ctx context.Context) error {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		s.log.Warn("Sync already running, skipping")
+		return nil
+	}
+	s.running = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
+	}()
+
+	start := time.Now()
 	s.log.Info("Starting sync")
 
-	// Fetch source calendar
 	icsData, etag, err := s.source.FetchCalendar(ctx)
 	if err != nil {
+		metrics.SyncErrors.WithLabelValues("source", "fetch").Inc()
 		return fmt.Errorf("fetch source: %w", err)
 	}
 
-	// Parse events
-	events, err := parseEvents(icsData)
+	events, err := parseEvents(icsData, s.cfg.Sync.FilterPrivate)
 	if err != nil {
+		metrics.SyncErrors.WithLabelValues("source", "parse").Inc()
 		return fmt.Errorf("parse events: %w", err)
 	}
 
-	s.log.Infow("Fetched source events", "count", len(events))
+	s.log.Infow("Fetched source events", "count", len(events), "filter_private", s.cfg.Sync.FilterPrivate)
 
-	// Sync to each destination
+	var totalCreated, totalUpdated, totalDeleted int
+
 	for i, dest := range s.destinations {
 		destName := s.cfg.Destinations[i].Name
-		if err := s.syncDestination(ctx, dest, destName, events); err != nil {
+		destStart := time.Now()
+
+		created, updated, deleted, err := s.syncDestination(ctx, dest, destName, events)
+		if err != nil {
 			s.log.Errorw("Destination sync failed", "dest", destName, "error", err)
+			metrics.SyncErrors.WithLabelValues(destName, "sync").Inc()
 			continue
 		}
+
+		totalCreated += created
+		totalUpdated += updated
+		totalDeleted += deleted
+
+		duration := time.Since(destStart).Seconds()
+		metrics.SyncDuration.WithLabelValues(destName, "success").Observe(duration)
+		metrics.EventsSynced.WithLabelValues(destName, "created").Add(float64(created))
+		metrics.EventsSynced.WithLabelValues(destName, "updated").Add(float64(updated))
+		metrics.EventsSynced.WithLabelValues(destName, "deleted").Add(float64(deleted))
+		metrics.LastSyncTimestamp.WithLabelValues(destName).Set(float64(time.Now().Unix()))
 	}
 
-	s.log.Info("Sync completed")
+	totalDuration := time.Since(start).Seconds()
+	s.log.Infow("Sync completed",
+		"duration_sec", totalDuration,
+		"created", totalCreated,
+		"updated", totalUpdated,
+		"deleted", totalDeleted,
+	)
+
 	return nil
 }
 
-func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destName string, events map[string][]byte) error {
-	// Get existing mappings
+func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destName string, events map[string][]byte) (created, updated, deleted int, err error) {
 	existing, err := s.store.ListMappings(destName)
 	if err != nil {
-		return fmt.Errorf("list mappings: %w", err)
+		return 0, 0, 0, fmt.Errorf("list mappings: %w", err)
 	}
 
 	seen := make(map[string]bool)
@@ -79,43 +120,42 @@ func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destN
 		seen[uid] = true
 		hash := hashContent(icsData)
 
-		destUID, destHref, destETag, deleted, err := s.store.GetMapping(uid, destName)
+		destUID, destHref, destETag, isDeleted, err := s.store.GetMapping(uid, destName)
 		if err != nil {
-			return err
+			return 0, 0, 0, err
 		}
 
-		if existingHash, ok := existing[uid]; ok && existingHash == hash && !deleted {
+		if existingHash, ok := existing[uid]; ok && existingHash == hash && !isDeleted {
 			s.log.Debugw("Event unchanged", "uid", uid, "dest", destName)
 			continue
 		}
 
 		if destUID == "" {
-			// Create new
 			newHref, err := dest.CreateEvent(ctx, icsData)
 			if err != nil {
-				return fmt.Errorf("create event: %w", err)
+				return 0, 0, 0, fmt.Errorf("create event: %w", err)
 			}
 			if err := s.store.SetMapping(uid, destName, uid, newHref, "", hash, false); err != nil {
-				return err
+				return 0, 0, 0, err
 			}
 			s.log.Infow("Created event", "uid", uid, "dest", destName)
+			created++
 		} else {
-			// Update existing
 			if err := dest.UpdateEvent(ctx, destHref, icsData, destETag); err != nil {
-				return fmt.Errorf("update event: %w", err)
+				return 0, 0, 0, fmt.Errorf("update event: %w", err)
 			}
 			if err := s.store.SetMapping(uid, destName, destUID, destHref, "", hash, false); err != nil {
-				return err
+				return 0, 0, 0, err
 			}
 			s.log.Infow("Updated event", "uid", uid, "dest", destName)
+			updated++
 		}
 	}
 
-	// Handle deletions (events in dest but not in source)
 	for sourceUID, existingHash := range existing {
 		if !seen[sourceUID] {
-			destUID, destHref, destETag, deleted, err := s.store.GetMapping(sourceUID, destName)
-			if err != nil || deleted {
+			destUID, destHref, destETag, isDeleted, err := s.store.GetMapping(sourceUID, destName)
+			if err != nil || isDeleted {
 				continue
 			}
 			if s.cfg.Sync.DeleteMode == "hard" {
@@ -124,13 +164,14 @@ func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destN
 				}
 			}
 			if err := s.store.SetMapping(sourceUID, destName, destUID, destHref, destETag, existingHash, true); err != nil {
-				return err
+				return 0, 0, 0, err
 			}
 			s.log.Infow("Marked event deleted", "uid", sourceUID, "dest", destName)
+			deleted++
 		}
 	}
 
-	return nil
+	return created, updated, deleted, nil
 }
 
 func (s *Syncer) StartScheduler() {
@@ -148,6 +189,7 @@ func (s *Syncer) StartScheduler() {
 			}
 		})
 		s.scheduler.Start()
+		s.log.Infow("Scheduler started", "interval", interval)
 	}
 }
 
@@ -157,7 +199,13 @@ func (s *Syncer) Stop() {
 	}
 }
 
-func parseEvents(data []byte) (map[string][]byte, error) {
+func (s *Syncer) IsRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running
+}
+
+func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
 	cal, err := ical.NewDecoder(strings.NewReader(string(data))).Decode()
 	if err != nil {
 		return nil, err
@@ -165,18 +213,27 @@ func parseEvents(data []byte) (map[string][]byte, error) {
 
 	events := make(map[string][]byte)
 	for _, comp := range cal.Children {
-		if comp.Name == "VEVENT" {
-			uid := comp.Props.Get("UID")
-			if uid == "" {
+		if comp.Name != "VEVENT" {
+			continue
+		}
+
+		uid := comp.Props.Get("UID")
+		if uid == "" {
+			continue
+		}
+
+		if filterPrivate {
+			class := comp.Props.Get("CLASS")
+			if class == "PRIVATE" || class == "CONFIDENTIAL" {
 				continue
 			}
-			// Re-encode single event
-			eventCal := ical.NewCalendar()
-			eventCal.Children = []*ical.Component{comp}
-			var buf strings.Builder
-			ical.NewEncoder(&buf).Encode(eventCal)
-			events[uid] = []byte(buf.String())
 		}
+
+		eventCal := ical.NewCalendar()
+		eventCal.Children = []*ical.Component{comp}
+		var buf strings.Builder
+		ical.NewEncoder(&buf).Encode(eventCal)
+		events[uid] = []byte(buf.String())
 	}
 	return events, nil
 }

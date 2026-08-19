@@ -100,3 +100,7 @@ func (s *Store) ListMappings(destName string) (map[string]string, error) {
 func (s *Store) Close() error {
 	return s.db.Close()
 }
+
+func (s *Store) Ping() error {
+	return s.db.Ping()
+}

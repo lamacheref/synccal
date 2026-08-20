@@ -30,13 +30,13 @@
 - [x] Tests d'intégration réparés et validés (Testcontainers Nextcloud + nginx, sync-token incrémental)
 
 ## Sprint 4 - Multi-sources (BASE du projet)
-- [ ] **Config** : `source` devient une liste `sources` (chacune publique OU authentifiée par token / mot de passe d'application)
-- [ ] **Clients source par source** : public (GET .ics + ETag) ou authentifié (REPORT calendar-query)
-- [ ] **État de sync par source** : CTag / sync-token stockés par source (table `source_state` keyée par URL)
-- [ ] **Préfixage UID par hash de source** : éviter les conflits si le même événement existe sur plusieurs sources
-- [ ] **Sync multi-sources** : boucle sur toutes les sources → toutes les destinations
-- [ ] **Métriques par source** : duration, events, erreurs, last_sync par source
-- [ ] **Tests d'intégration multi-sources** : 2 sources (1 publique + 1 authentifiée) → 1 destination
+- [x] **Config 1:1** : `sources` liste de connexions, chaque source jumelée à SA destination (publique OU authentifiée par token / mot de passe d'application)
+- [x] **Clients source/destination par connexion** : public (GET .ics + ETag) ou authentifié (REPORT calendar-query)
+- [x] **État de sync par source** : CTag / sync-token stockés par source (table `source_state` keyée par URL)
+- [x] **Préfixage UID par hash de source** : éviter les conflits si le même événement existe sur plusieurs sources (préfixe sha256(url)[:8], détection de suppression filtrée par source)
+- [x] **Sync multi-connexions** : boucle sur toutes les connexions (1 source → 1 destination), une connexion en erreur ne bloque pas les autres
+- [x] **Métriques par source** : duration, events, erreurs, last_sync par source
+- [x] **Tests d'intégration multi-sources** : 2 sources (1 publique + 1 authentifiée) → 1 destination, UID partagé désambiguïsé, idempotence au 2e run
 
 ## Sprint 5 - Architecture Plugin (PRINCIPE du projet)
 - [ ] **Définir les interfaces Go** : `SourceConnector`, `DestinationConnector`, `EventTransformer`

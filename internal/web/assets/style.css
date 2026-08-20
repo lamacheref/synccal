@@ -150,6 +150,7 @@ td { padding: 10px 12px; border-bottom: 1px solid var(--divider); }
 tr:hover td { background: #fafafa; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .hash { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-url { max-width: 320px; overflow-wrap: anywhere; word-break: break-word; }
 
 /* Badges */
 .badge {

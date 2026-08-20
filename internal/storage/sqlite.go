@@ -93,8 +93,19 @@ func (s *Store) SetMapping(sourceUID, destName, destUID, destHref, destETag, con
 	return err
 }
 
-func (s *Store) ListMappings(destName string) (map[string]string, error) {
-	rows, err := s.db.Query(`SELECT source_uid, content_hash FROM event_mapping WHERE dest_name = ? AND deleted = FALSE`, destName)
+// ListMappings returns the active (non-deleted) mappings for a destination.
+// When sourcePrefix is non-empty, only mappings whose source_uid starts with
+// that per-source prefix are returned, so deletion detection never touches
+// events synced from another source.
+func (s *Store) ListMappings(destName, sourcePrefix string) (map[string]string, error) {
+	query := `SELECT source_uid, content_hash FROM event_mapping WHERE dest_name = ? AND deleted = FALSE`
+	args := []interface{}{destName}
+	if sourcePrefix != "" {
+		query += ` AND source_uid LIKE ?`
+		args = append(args, sourcePrefix+"-%")
+	}
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

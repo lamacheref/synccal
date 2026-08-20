@@ -9,17 +9,17 @@ import (
 
 // Sanitized view returned by GET /api/config — passwords never leave the server.
 type configView struct {
-	Source       sourceView        `json:"source"`
-	Destinations []destinationView `json:"destinations"`
-	Database     databaseView      `json:"database"`
-	Sync         syncView          `json:"sync"`
-	Web          webView           `json:"web"`
-	Logging      loggingView       `json:"logging"`
+	Sources  []sourceView `json:"sources"`
+	Database databaseView `json:"database"`
+	Sync     syncView     `json:"sync"`
+	Web      webView      `json:"web"`
+	Logging  loggingView  `json:"logging"`
 }
 
 type sourceView struct {
-	URL      string `json:"url"`
-	Username string `json:"username"`
+	URL         string          `json:"url"`
+	Username    string          `json:"username"`
+	Destination destinationView `json:"destination"`
 }
 
 type destinationView struct {
@@ -53,17 +53,17 @@ type loggingView struct {
 // Update payload accepted by PUT /api/config. A nil/omitted password means
 // "keep the current one" — passwords are write-only.
 type configUpdate struct {
-	Source       *sourceUpdate        `json:"source"`
-	Destinations *[]destinationUpdate `json:"destinations"`
-	Sync         *syncUpdate          `json:"sync"`
-	Web          *webUpdate           `json:"web"`
-	Logging      *loggingUpdate       `json:"logging"`
+	Sources *[]sourceUpdate `json:"sources"`
+	Sync    *syncUpdate     `json:"sync"`
+	Web     *webUpdate      `json:"web"`
+	Logging *loggingUpdate  `json:"logging"`
 }
 
 type sourceUpdate struct {
-	URL      string  `json:"url"`
-	Username string  `json:"username"`
-	Password *string `json:"password"`
+	URL         string             `json:"url"`
+	Username    string             `json:"username"`
+	Password    *string            `json:"password"`
+	Destination *destinationUpdate `json:"destination"`
 }
 
 type destinationUpdate struct {
@@ -108,37 +108,42 @@ func (s *Server) configView() configView {
 		Web:     webView{Addr: cfg.Web.Addr, TokenSet: cfg.Web.Token != ""},
 		Logging: loggingView{Level: cfg.Logging.Level, Format: cfg.Logging.Format},
 	}
-	cv.Source = sourceView{URL: cfg.Source.URL, Username: cfg.Source.Username}
-	for _, d := range cfg.Destinations {
-		cv.Destinations = append(cv.Destinations, destinationView{Name: d.Name, URL: d.URL, Username: d.Username})
+	for _, s := range cfg.Sources {
+		cv.Sources = append(cv.Sources, sourceView{
+			URL:         s.URL,
+			Username:    s.Username,
+			Destination: destinationView{Name: s.Destination.Name, URL: s.Destination.URL, Username: s.Destination.Username},
+		})
 	}
 	return cv
 }
 
 // mergeConfigUpdate applies the update onto the current config in place.
 func mergeConfigUpdate(cfg *config.Config, upd *configUpdate) {
-	if upd.Source != nil {
-		if upd.Source.URL != "" {
-			cfg.Source.URL = upd.Source.URL
-		}
-		cfg.Source.Username = upd.Source.Username
-		if upd.Source.Password != nil && *upd.Source.Password != "" {
-			cfg.Source.Password = *upd.Source.Password
-		}
-	}
-
-	if upd.Destinations != nil {
-		dests := make([]config.DestinationConfig, 0, len(*upd.Destinations))
-		for i, d := range *upd.Destinations {
-			nd := config.DestinationConfig{Name: d.Name, URL: d.URL, Username: d.Username}
-			if d.Password != nil && *d.Password != "" {
-				nd.Password = *d.Password
-			} else if i < len(cfg.Destinations) {
-				nd.Password = cfg.Destinations[i].Password
+	if upd.Sources != nil {
+		srcs := make([]config.SourceConfig, 0, len(*upd.Sources))
+		for i, s := range *upd.Sources {
+			ns := config.SourceConfig{URL: s.URL, Username: s.Username}
+			if s.Password != nil && *s.Password != "" {
+				ns.Password = *s.Password
+			} else if i < len(cfg.Sources) {
+				ns.Password = cfg.Sources[i].Password
 			}
-			dests = append(dests, nd)
+
+			if s.Destination != nil {
+				nd := config.DestinationConfig{Name: s.Destination.Name, URL: s.Destination.URL, Username: s.Destination.Username}
+				if s.Destination.Password != nil && *s.Destination.Password != "" {
+					nd.Password = *s.Destination.Password
+				} else if i < len(cfg.Sources) {
+					nd.Password = cfg.Sources[i].Destination.Password
+				}
+				ns.Destination = nd
+			} else if i < len(cfg.Sources) {
+				ns.Destination = cfg.Sources[i].Destination
+			}
+			srcs = append(srcs, ns)
 		}
-		cfg.Destinations = dests
+		cfg.Sources = srcs
 	}
 
 	if upd.Sync != nil {

@@ -8,19 +8,21 @@ import (
 )
 
 type Config struct {
-	Source       SourceConfig        `mapstructure:"source" yaml:"source"`
-	Destinations []DestinationConfig `mapstructure:"destinations" yaml:"destinations"`
-	Database     DatabaseConfig      `mapstructure:"database" yaml:"database"`
-	Sync         SyncConfig          `mapstructure:"sync" yaml:"sync"`
-	Metrics      MetricsConfig       `mapstructure:"metrics" yaml:"metrics"`
-	Web          WebConfig           `mapstructure:"web" yaml:"web"`
-	Logging      LoggingConfig       `mapstructure:"logging" yaml:"logging"`
+	Sources  []SourceConfig `mapstructure:"sources" yaml:"sources"`
+	Database DatabaseConfig `mapstructure:"database" yaml:"database"`
+	Sync     SyncConfig     `mapstructure:"sync" yaml:"sync"`
+	Metrics  MetricsConfig  `mapstructure:"metrics" yaml:"metrics"`
+	Web      WebConfig      `mapstructure:"web" yaml:"web"`
+	Logging  LoggingConfig  `mapstructure:"logging" yaml:"logging"`
 }
 
+// SourceConfig describes one connection. Each source is paired 1:1 with its own
+// destination calendar.
 type SourceConfig struct {
-	URL      string `mapstructure:"url" yaml:"url"`
-	Username string `mapstructure:"username" yaml:"username"`
-	Password string `mapstructure:"password" yaml:"password"`
+	URL         string            `mapstructure:"url" yaml:"url"`
+	Username    string            `mapstructure:"username" yaml:"username"`
+	Password    string            `mapstructure:"password" yaml:"password"`
+	Destination DestinationConfig `mapstructure:"destination" yaml:"destination"`
 }
 
 type DestinationConfig struct {
@@ -112,21 +114,21 @@ func setDefaults(cfg *Config) {
 }
 
 func Validate(cfg *Config) error {
-	if cfg.Source.URL == "" {
-		return fmt.Errorf("source.url is required")
+	if len(cfg.Sources) == 0 {
+		return fmt.Errorf("at least one source is required")
 	}
-	if len(cfg.Destinations) == 0 {
-		return fmt.Errorf("at least one destination is required")
-	}
-	for i, d := range cfg.Destinations {
-		if d.Name == "" {
-			return fmt.Errorf("destination[%d].name is required", i)
+	for i, s := range cfg.Sources {
+		if s.URL == "" {
+			return fmt.Errorf("source[%d].url is required", i)
 		}
-		if d.URL == "" {
-			return fmt.Errorf("destination[%d].url is required", i)
+		if s.Destination.Name == "" {
+			return fmt.Errorf("source[%d].destination.name is required", i)
 		}
-		if d.Username == "" || d.Password == "" {
-			return fmt.Errorf("destination[%d] requires username and password (token)", i)
+		if s.Destination.URL == "" {
+			return fmt.Errorf("source[%d].destination.url is required", i)
+		}
+		if s.Destination.Username == "" || s.Destination.Password == "" {
+			return fmt.Errorf("source[%d].destination requires username and password (token)", i)
 		}
 	}
 	if cfg.Database.Path == "" {

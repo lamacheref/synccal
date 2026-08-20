@@ -34,10 +34,12 @@ func (f *fakeSyncer) IsRunning() bool { return f.running.Load() }
 
 func (f *fakeSyncer) Status() sync.Status {
 	return sync.Status{
-		Running:      f.running.Load(),
-		SourceURL:    "https://example.com/calendar.ics",
-		Interval:     "1h",
-		Destinations: []sync.DestStats{{Name: "dest1"}},
+		Running:  f.running.Load(),
+		Interval: "1h",
+		Connections: []sync.ConnectionStats{{
+			SourceURL:   "https://example.com/calendar.ics",
+			Destination: "dest1",
+		}},
 	}
 }
 
@@ -48,9 +50,9 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeSyncer, *storage.S
 	t.Helper()
 
 	cfg := &config.Config{
-		Source: config.SourceConfig{URL: "https://example.com/calendar.ics"},
-		Destinations: []config.DestinationConfig{{
-			Name: "dest1", URL: "https://dest.example.com/", Username: "user", Password: "secret",
+		Sources: []config.SourceConfig{{
+			URL:         "https://example.com/calendar.ics",
+			Destination: config.DestinationConfig{Name: "dest1", URL: "https://dest.example.com/", Username: "user", Password: "secret"},
 		}},
 		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "test.db")},
 		Sync: config.SyncConfig{
@@ -131,13 +133,15 @@ func TestStatusEndpoint(t *testing.T) {
 
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "https://example.com/calendar.ics", body["source_url"])
 	assert.Equal(t, "1h", body["interval"])
 	assert.Equal(t, false, body["running"])
 
-	dests, ok := body["destinations"].([]interface{})
+	conns, ok := body["connections"].([]interface{})
 	require.True(t, ok)
-	require.Len(t, dests, 1)
+	require.Len(t, conns, 1)
+	conn := conns[0].(map[string]interface{})
+	assert.Equal(t, "https://example.com/calendar.ics", conn["source_url"])
+	assert.Equal(t, "dest1", conn["destination"])
 
 	fake.running.Store(true)
 	rec = doRequest(t, handler, http.MethodGet, "/api/status", "", "")
@@ -159,10 +163,17 @@ func TestConfigGetSanitized(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "secret", "password must never be exposed")
 
-	source := body["source"].(map[string]interface{})
+	sources := body["sources"].([]interface{})
+	require.Len(t, sources, 1)
+	source := sources[0].(map[string]interface{})
 	assert.Equal(t, "https://example.com/calendar.ics", source["url"])
 	_, hasPassword := source["password"]
 	assert.False(t, hasPassword, "password key must be absent")
+
+	dest := source["destination"].(map[string]interface{})
+	assert.Equal(t, "dest1", dest["name"])
+	_, hasDestPassword := dest["password"]
+	assert.False(t, hasDestPassword, "destination password key must be absent")
 
 	web := body["web"].(map[string]interface{})
 	assert.Equal(t, false, web["token_set"])
@@ -173,10 +184,17 @@ func TestConfigPutUpdatesAndRebuilds(t *testing.T) {
 	handler := s.Handler()
 
 	payload := `{
-		"source": {"url": "https://newsource.example.com/cal.ics", "username": "srcuser", "password": "newsecret"},
-		"destinations": [
-			{"name": "dest1", "url": "https://dest.example.com/", "username": "user"},
-			{"name": "dest2", "url": "https://dest2.example.com/", "username": "user", "password": "tok2"}
+		"sources": [
+			{
+				"url": "https://newsource.example.com/cal.ics",
+				"username": "srcuser",
+				"password": "newsecret",
+				"destination": {"name": "dest1", "url": "https://dest.example.com/", "username": "user"}
+			},
+			{
+				"url": "https://newsource2.example.com/cal.ics",
+				"destination": {"name": "dest2", "url": "https://dest2.example.com/", "username": "user", "password": "tok2"}
+			}
 		],
 		"sync": {"interval": "30m", "timeout": "3m", "batch_size": 50, "delete_mode": "hard", "filter_private": false},
 		"web": {"addr": ":9090"},
@@ -189,11 +207,13 @@ func TestConfigPutUpdatesAndRebuilds(t *testing.T) {
 
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
-	assert.Equal(t, "https://newsource.example.com/cal.ics", s.cfg.Source.URL)
-	assert.Equal(t, "newsecret", s.cfg.Source.Password, "explicit password must be applied")
-	assert.Len(t, s.cfg.Destinations, 2)
-	assert.Equal(t, "tok2", s.cfg.Destinations[1].Password, "password set on new dest applied")
-	assert.Equal(t, "secret", s.cfg.Destinations[0].Password, "omitted password keeps previous value")
+	require.Len(t, s.cfg.Sources, 2)
+	assert.Equal(t, "https://newsource.example.com/cal.ics", s.cfg.Sources[0].URL)
+	assert.Equal(t, "newsecret", s.cfg.Sources[0].Password, "explicit source password must be applied")
+	assert.Equal(t, "https://newsource2.example.com/cal.ics", s.cfg.Sources[1].URL)
+	assert.Equal(t, "dest1", s.cfg.Sources[0].Destination.Name)
+	assert.Equal(t, "secret", s.cfg.Sources[0].Destination.Password, "omitted dest password keeps previous value")
+	assert.Equal(t, "tok2", s.cfg.Sources[1].Destination.Password, "password set on new dest applied")
 	assert.Equal(t, "30m", s.cfg.Sync.Interval)
 	assert.Equal(t, false, s.cfg.Sync.FilterPrivate)
 	assert.Equal(t, "debug", s.cfg.Logging.Level)
@@ -211,8 +231,8 @@ func TestConfigPutValidationFails(t *testing.T) {
 	s, _, _ := newTestServer(t, "")
 	handler := s.Handler()
 
-	// Empty destinations list is invalid
-	payload := `{"destinations": []}`
+	// A source with an invalid destination (missing name) is rejected.
+	payload := `{"sources": [{"url": "https://example.com/cal.ics", "destination": {}}]}`
 	rec := doRequest(t, handler, http.MethodPut, "/api/config", payload, "")
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

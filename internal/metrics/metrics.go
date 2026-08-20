@@ -40,10 +40,44 @@ var (
 		},
 		[]string{"destination"},
 	)
+
+	SourceEvents = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "synccal_source_events_total",
+			Help: "Total number of events fetched per source",
+		},
+		[]string{"source"},
+	)
+
+	SourceSyncDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "synccal_source_sync_duration_seconds",
+			Help:    "Duration of per-source sync operations",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"source", "status"},
+	)
+
+	SourceErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "synccal_source_errors_total",
+			Help: "Total number of per-source sync errors",
+		},
+		[]string{"source", "type"},
+	)
+
+	SourceLastSyncTimestamp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "synccal_source_last_sync_timestamp",
+			Help: "Unix timestamp of last successful per-source sync",
+		},
+		[]string{"source"},
+	)
 )
 
 func init() {
-	prometheus.MustRegister(SyncDuration, EventsSynced, SyncErrors, LastSyncTimestamp)
+	prometheus.MustRegister(SyncDuration, EventsSynced, SyncErrors, LastSyncTimestamp,
+		SourceEvents, SourceSyncDuration, SourceErrors, SourceLastSyncTimestamp)
 }
 
 func Handler() http.Handler {

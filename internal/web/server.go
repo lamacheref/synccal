@@ -242,7 +242,7 @@ func (s *Server) applyConfig(w http.ResponseWriter, r *http.Request) {
 	s.cfg = newCfg
 	s.cfgMu.Unlock()
 
-	s.log.Infow("Config updated via web UI", "source", newCfg.Source.URL, "destinations", len(newCfg.Destinations))
+	s.log.Infow("Config updated via web UI", "connections", len(newCfg.Sources))
 	writeJSON(w, http.StatusOK, s.configView())
 }
 

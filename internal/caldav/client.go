@@ -480,13 +480,19 @@ func (c *Client) ListEvents(ctx context.Context) ([]EventRef, error) {
 
 		refs = nil
 		for _, href := range xmlHrefs(data, false) {
+			// Skip collections (e.g. the calendar itself, returned by PROPFIND
+			// on the collection URL).
+			if strings.HasSuffix(href, "/") {
+				continue
+			}
 			ics, err := c.getResource(ctx, href)
 			if err != nil {
 				return err
 			}
 			uid, err := eventUID(ics)
 			if err != nil {
-				return err
+				// Not a VEVENT resource — ignore.
+				continue
 			}
 			refs = append(refs, EventRef{Href: href, UID: uid})
 		}

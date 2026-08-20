@@ -150,44 +150,45 @@ async function loadDashboard() {
   const state = st.running ? "err" : st.last_error ? "err" : "ok";
   const stateLabel = st.running ? "En cours" : st.last_error ? "Erreur" : "OK";
 
-  let destRows = "";
-  if (st.destinations && st.destinations.length) {
-    destRows = st.destinations
+  let connRows = "";
+  if (st.connections && st.connections.length) {
+    connRows = st.connections
       .map(
-        (d) => `
+        (c) => `
         <tr>
-          <td>${esc(d.name)}</td>
-          <td>${d.last_error ? `<span class="badge err">${esc(d.last_error)}</span>` : `<span class="badge ok">OK</span>`}</td>
-          <td>${fmtTime(d.last_sync)}</td>
-          <td>${d.created}</td>
-          <td>${d.updated}</td>
-          <td>${d.deleted}</td>
-          <td>${d.errors}</td>
-          <td>${d.last_duration_sec ? d.last_duration_sec.toFixed(1) + "s" : "—"}</td>
+          <td class="mono src-url" title="${esc(c.source_url)}">${esc(c.source_url)}</td>
+          <td>${esc(c.destination)}</td>
+          <td>${c.last_error ? `<span class="badge err">${esc(c.last_error)}</span>` : `<span class="badge ok">OK</span>`}</td>
+          <td>${c.events}</td>
+          <td>${c.created}</td>
+          <td>${c.updated}</td>
+          <td>${c.deleted}</td>
+          <td>${c.errors}</td>
+          <td>${fmtTime(c.last_sync)}</td>
+          <td>${c.last_duration_sec ? c.last_duration_sec.toFixed(1) + "s" : "—"}</td>
         </tr>`
       )
       .join("");
   } else {
-    destRows = `<tr><td colspan="8" class="empty">Aucune destination configurée</td></tr>`;
+    connRows = `<tr><td colspan="10" class="empty">Aucune connexion configurée</td></tr>`;
   }
 
   $("#view-dashboard").innerHTML = `
     <div class="grid cols-3">
       <div class="card stat"><div class="value ${state}">${stateLabel}</div><div class="label">État de la synchronisation</div></div>
-      <div class="card stat"><div class="value text">${esc(st.source_url)}</div><div class="label">Source</div></div>
       <div class="card stat"><div class="value">${esc(st.interval || "manuel")}</div><div class="label">Intervalle</div></div>
       <div class="card stat"><div class="value">${esc(lastSync)}</div><div class="label">Dernière synchronisation</div></div>
       <div class="card stat"><div class="value">${esc(dur)}</div><div class="label">Dernière durée</div></div>
       ${st.last_error ? `<div class="card stat"><div class="value err">${esc(st.last_error)}</div><div class="label">Dernière erreur</div></div>` : ""}
     </div>
     <div class="card">
-      <h2>Destinations</h2>
+      <h2>Connexions</h2>
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Nom</th><th>Statut</th><th>Dernière sync</th><th>Créés</th><th>Mis à jour</th><th>Supprimés</th><th>Erreurs</th><th>Durée</th></tr>
+            <tr><th>Source</th><th>Destination</th><th>Statut</th><th>Événements</th><th>Créés</th><th>Mis à jour</th><th>Supprimés</th><th>Erreurs</th><th>Dernière sync</th><th>Durée</th></tr>
           </thead>
-          <tbody>${destRows}</tbody>
+          <tbody>${connRows}</tbody>
         </table>
       </div>
     </div>`;
@@ -209,16 +210,19 @@ async function loadConfigForm() {
     return;
   }
 
-  const destFields = cfg.destinations
+  const srcFields = cfg.sources
     .map(
-      (d, i) => `
+      (s, i) => `
       <div class="card">
-        <h2>Destination ${i + 1}</h2>
+        <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
         <div class="form-grid">
-          <div class="field"><label>Nom</label><input data-dest="${i}" data-field="name" value="${esc(d.name)}"></div>
-          <div class="field"><label>URL</label><input data-dest="${i}" data-field="url" value="${esc(d.url)}"></div>
-          <div class="field"><label>Utilisateur</label><input data-dest="${i}" data-field="username" value="${esc(d.username)}" autocomplete="off"></div>
-          <div class="field"><label>Mot de passe / token <span class="hint">(laisser vide pour conserver)</span></label><input data-dest="${i}" data-field="password" type="password" autocomplete="new-password"></div>
+          <div class="field"><label>URL source</label><input data-source="${i}" data-field="url" value="${esc(s.url)}"></div>
+          <div class="field"><label>Utilisateur source</label><input data-source="${i}" data-field="username" value="${esc(s.username)}" autocomplete="off"></div>
+          <div class="field"><label>Mot de passe / token source <span class="hint">(laisser vide pour conserver)</span></label><input data-source="${i}" data-field="password" type="password" autocomplete="new-password"></div>
+          <div class="field"><label>Nom destination</label><input data-source="${i}" data-field="dest_name" value="${esc(s.destination && s.destination.name || "")}"></div>
+          <div class="field"><label>URL destination</label><input data-source="${i}" data-field="dest_url" value="${esc(s.destination && s.destination.url || "")}"></div>
+          <div class="field"><label>Utilisateur destination</label><input data-source="${i}" data-field="dest_username" value="${esc(s.destination && s.destination.username || "")}" autocomplete="off"></div>
+          <div class="field"><label>Mot de passe destination <span class="hint">(laisser vide pour conserver)</span></label><input data-source="${i}" data-field="dest_password" type="password" autocomplete="new-password"></div>
         </div>
       </div>`
     )
@@ -226,16 +230,7 @@ async function loadConfigForm() {
 
   $("#view-config").innerHTML = `
     <form id="config-form">
-      <div class="card">
-        <h2>Source</h2>
-        <div class="form-grid">
-          <div class="field"><label>URL</label><input id="cfg-source-url" value="${esc(cfg.source.url)}"></div>
-          <div class="field"><label>Utilisateur</label><input id="cfg-source-username" value="${esc(cfg.source.username)}" autocomplete="off"></div>
-          <div class="field"><label>Mot de passe / token <span class="hint">(laisser vide pour conserver)</span></label><input id="cfg-source-password" type="password" autocomplete="new-password"></div>
-        </div>
-      </div>
-
-      <div id="destinations">${destFields}</div>
+      <div id="sources">${srcFields}</div>
 
       <div class="card">
         <h2>Synchronisation</h2>
@@ -279,50 +274,60 @@ async function loadConfigForm() {
 
       <div class="toolbar">
         <button type="submit" class="btn btn-primary">Enregistrer la configuration</button>
-        <button type="button" class="btn btn-outline" id="btn-add-dest">+ Ajouter une destination</button>
+        <button type="button" class="btn btn-outline" id="btn-add-source">+ Ajouter une connexion</button>
       </div>
     </form>`;
 
-  $("#btn-add-dest").addEventListener("click", () => addDestinationCard());
+  $("#btn-add-source").addEventListener("click", () => addSourceCard());
   $("#config-form").addEventListener("submit", saveConfig);
 }
 
-function addDestinationCard() {
-  const wrap = $("#destinations");
+function addSourceCard() {
+  const wrap = $("#sources");
   const i = wrap.querySelectorAll(".card").length;
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
-    <h2>Destination ${i + 1}</h2>
+    <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
     <div class="form-grid">
-      <div class="field"><label>Nom</label><input data-dest="${i}" data-field="name" value=""></div>
-      <div class="field"><label>URL</label><input data-dest="${i}" data-field="url" value=""></div>
-      <div class="field"><label>Utilisateur</label><input data-dest="${i}" data-field="username" value="" autocomplete="off"></div>
-      <div class="field"><label>Mot de passe / token</label><input data-dest="${i}" data-field="password" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>URL source</label><input data-source="${i}" data-field="url" value=""></div>
+      <div class="field"><label>Utilisateur source</label><input data-source="${i}" data-field="username" value="" autocomplete="off"></div>
+      <div class="field"><label>Mot de passe / token source</label><input data-source="${i}" data-field="password" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>Nom destination</label><input data-source="${i}" data-field="dest_name" value=""></div>
+      <div class="field"><label>URL destination</label><input data-source="${i}" data-field="dest_url" value=""></div>
+      <div class="field"><label>Utilisateur destination</label><input data-source="${i}" data-field="dest_username" value="" autocomplete="off"></div>
+      <div class="field"><label>Mot de passe destination</label><input data-source="${i}" data-field="dest_password" type="password" autocomplete="new-password"></div>
     </div>`;
   wrap.appendChild(card);
 }
 
 function collectConfig() {
   const cfg = JSON.parse(JSON.stringify(configCache || {}));
-  cfg.source = {
-    url: $("#cfg-source-url").value,
-    username: $("#cfg-source-username").value,
-  };
-  const srcPass = $("#cfg-source-password").value;
-  if (srcPass) cfg.source.password = srcPass;
-
-  cfg.destinations = $$("#destinations .card").map((card) => {
-    const d = { name: "", url: "", username: "" };
+  cfg.sources = $$("#sources .card").map((card) => {
+    const s = { url: "", username: "", destination: {} };
     card.querySelectorAll("[data-field]").forEach((input) => {
       const key = input.dataset.field;
-      if (key === "password") {
-        if (input.value) d.password = input.value;
-      } else {
-        d[key] = input.value;
+      switch (key) {
+        case "password":
+          if (input.value) s.password = input.value;
+          break;
+        case "dest_name":
+          if (input.value) s.destination.name = input.value;
+          break;
+        case "dest_url":
+          if (input.value) s.destination.url = input.value;
+          break;
+        case "dest_username":
+          if (input.value) s.destination.username = input.value;
+          break;
+        case "dest_password":
+          if (input.value) s.destination.password = input.value;
+          break;
+        default:
+          s[key] = input.value;
       }
     });
-    return d;
+    return s;
   });
 
   cfg.sync = {
@@ -375,8 +380,11 @@ async function loadEvents() {
     } catch (e) { /* ignore */ }
   }
 
-  const destOptions = (cfg ? cfg.destinations : [])
-    .map((d) => `<option value="${esc(d.name)}" ${eventsState.dest === d.name ? "selected" : ""}>${esc(d.name)}</option>`)
+  const destOptions = (cfg ? cfg.sources : [])
+    .map((s) => {
+      const d = s.destination && s.destination.name ? s.destination.name : "";
+      return d ? `<option value="${esc(d)}" ${eventsState.dest === d ? "selected" : ""}>${esc(d)}</option>` : "";
+    })
     .join("");
 
   let data;

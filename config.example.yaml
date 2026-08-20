@@ -1,28 +1,27 @@
 # SyncCal Configuration Example
 # Copy to config.yaml and adjust
 
-# Source calendar (public OR authenticated)
-source:
-  # Option 1: Public calendar (.ics URL, no auth)
-  url: "https://example.com/calendar.ics"
-  # username: ""  # Optional - if provided, uses CalDAV auth
-  # password: ""  # Optional - token or app password
+# Connections: each source is paired 1:1 with its own destination calendar
+sources:
+  # Source: public calendar (.ics URL, no auth)
+  - url: "https://example.com/calendar.ics"
+    # username: ""  # Optional - if provided, uses CalDAV auth
+    # password: ""  # Optional - token or app password
+    destination:
+      name: "nextcloud-personal"
+      url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
+      username: "user"
+      password: "app-password-or-token"
 
-  # Option 2: Authenticated CalDAV calendar
-  # url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
-  # username: "user"
-  # password: "app-password-or-token"
-
-# Destination calendars (authenticated)
-destinations:
-  - name: "nextcloud-personal"
-    url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
-    username: "user"
-    password: "app-password-or-token"
-  # - name: "carbonio-work"
-  #   url: "https://mail.example.com/dav/calendars/user/work/"
-  #   username: "user@domain.com"
-  #   password: "app-password"
+  # Another connection: authenticated source → its own destination
+  # - url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
+  #   username: "user"
+  #   password: "app-password-or-token"
+  #   destination:
+  #     name: "carbonio-work"
+  #     url: "https://mail.example.com/dav/calendars/user/work/"
+  #     username: "user@domain.com"
+  #     password: "app-password"
 
 # Database for UID mapping and state
 database:

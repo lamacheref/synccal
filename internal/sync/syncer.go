@@ -18,8 +18,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type DestStats struct {
-	Name         string     `json:"name"`
+// ConnectionStats aggregates the state of one source→destination pairing.
+type ConnectionStats struct {
+	SourceURL    string     `json:"source_url"`
+	Destination  string     `json:"destination"`
+	Events       int64      `json:"events"`
 	Created      int64      `json:"created"`
 	Updated      int64      `json:"updated"`
 	Deleted      int64      `json:"deleted"`
@@ -30,18 +33,17 @@ type DestStats struct {
 }
 
 type Status struct {
-	Running      bool        `json:"running"`
-	SourceURL    string      `json:"source_url"`
-	Interval     string      `json:"interval"`
-	LastSync     *time.Time  `json:"last_sync,omitempty"`
-	LastError    string      `json:"last_error,omitempty"`
-	LastDuration float64     `json:"last_duration_sec,omitempty"`
-	Destinations []DestStats `json:"destinations"`
+	Running      bool              `json:"running"`
+	Interval     string            `json:"interval"`
+	LastSync     *time.Time        `json:"last_sync,omitempty"`
+	LastError    string            `json:"last_error,omitempty"`
+	LastDuration float64           `json:"last_duration_sec,omitempty"`
+	Connections  []ConnectionStats `json:"connections"`
 }
 
 type Syncer struct {
 	cfg          *config.Config
-	source       *caldav.Client
+	sources      []*caldav.Client
 	destinations []*caldav.Client
 	store        *storage.Store
 	log          *zap.SugaredLogger
@@ -50,24 +52,24 @@ type Syncer struct {
 	running      bool
 
 	statsMu    sync.Mutex
-	destStats  map[string]*DestStats
+	connStats  map[string]*ConnectionStats
 	lastSync   *time.Time
 	lastError  string
 	lastDurSec float64
 }
 
-func New(cfg *config.Config, source *caldav.Client, dests []*caldav.Client, store *storage.Store, log *zap.SugaredLogger) *Syncer {
+func New(cfg *config.Config, sources []*caldav.Client, dests []*caldav.Client, store *storage.Store, log *zap.SugaredLogger) *Syncer {
 	s := &Syncer{
 		cfg:          cfg,
-		source:       source,
+		sources:      sources,
 		destinations: dests,
 		store:        store,
 		log:          log,
-		destStats:    make(map[string]*DestStats),
+		connStats:    make(map[string]*ConnectionStats),
 	}
-	for i := range cfg.Destinations {
-		name := cfg.Destinations[i].Name
-		s.destStats[name] = &DestStats{Name: name}
+	for i := range cfg.Sources {
+		url := cfg.Sources[i].URL
+		s.connStats[url] = &ConnectionStats{SourceURL: url, Destination: cfg.Sources[i].Destination.Name}
 	}
 	return s
 }
@@ -91,61 +93,82 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	start := time.Now()
 	s.log.Info("Starting sync")
 
-	sourceState, err := s.store.GetSourceState(s.cfg.Source.URL)
-	if err != nil {
-		s.log.Warnw("Failed to get source state", "error", err)
-		sourceState = &storage.CalendarState{}
-	}
-
-	changed, newSourceState, err := s.source.HasChanged(ctx, toCalDAVState(sourceState))
-	if err != nil {
-		metrics.SyncErrors.WithLabelValues("source", "check_change").Inc()
-		s.recordError("check_change", err)
-		return fmt.Errorf("check source changes: %w", err)
-	}
-
-	if !changed {
-		s.log.Info("Source unchanged, skipping sync")
-		return nil
-	}
-
-	s.log.Infow("Source changed, fetching events",
-		"ctag_changed", sourceState.CTag != newSourceState.CTag,
-		"sync_token_changed", sourceState.SyncToken != newSourceState.SyncToken,
-	)
-
-	syncToken := newSourceState.SyncToken
-	icsData, fetchedState, err := s.source.FetchCalendar(ctx, syncToken)
-	if err != nil {
-		metrics.SyncErrors.WithLabelValues("source", "fetch").Inc()
-		s.recordError("fetch", err)
-		return fmt.Errorf("fetch source: %w", err)
-	}
-
-	if err := s.store.SetSourceState(s.cfg.Source.URL, toStorageState(fetchedState)); err != nil {
-		s.log.Warnw("Failed to save source state", "error", err)
-	}
-
-	events, err := parseEvents(icsData, s.cfg.Sync.FilterPrivate)
-	if err != nil {
-		metrics.SyncErrors.WithLabelValues("source", "parse").Inc()
-		s.recordError("parse", err)
-		return fmt.Errorf("parse events: %w", err)
-	}
-
-	s.log.Infow("Fetched source events", "count", len(events), "filter_private", s.cfg.Sync.FilterPrivate)
-
 	var totalCreated, totalUpdated, totalDeleted int
+	var firstErr error
 
-	for i, dest := range s.destinations {
-		destName := s.cfg.Destinations[i].Name
-		destStart := time.Now()
+	for si, sourceClient := range s.sources {
+		sourceCfg := s.cfg.Sources[si]
+		destClient := s.destinations[si]
+		destCfg := sourceCfg.Destination
+		sourceURL := sourceCfg.URL
+		prefix := sourcePrefix(sourceURL)
 
-		created, updated, deleted, err := s.syncDestination(ctx, dest, destName, events)
+		s.log.Infow("Syncing connection",
+			"source", sourceURL,
+			"dest", destCfg.Name,
+		)
+
+		sourceState, err := s.store.GetSourceState(sourceURL)
 		if err != nil {
-			s.log.Errorw("Destination sync failed", "dest", destName, "error", err)
-			metrics.SyncErrors.WithLabelValues(destName, "sync").Inc()
-			s.recordDestError(destName, err)
+			s.log.Warnw("Failed to get source state", "source", sourceURL, "error", err)
+			sourceState = &storage.CalendarState{}
+		}
+
+		changed, newSourceState, err := sourceClient.HasChanged(ctx, toCalDAVState(sourceState))
+		if err != nil {
+			metrics.SourceErrors.WithLabelValues(sourceURL, "check_change").Inc()
+			s.recordConnError(sourceURL, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("check source %s changes: %w", sourceURL, err)
+			}
+			continue
+		}
+
+		if !changed {
+			s.log.Infow("Source unchanged, skipping", "source", sourceURL)
+			continue
+		}
+
+		s.log.Infow("Source changed, fetching events",
+			"source", sourceURL,
+			"ctag_changed", sourceState.CTag != newSourceState.CTag,
+			"sync_token_changed", sourceState.SyncToken != newSourceState.SyncToken,
+		)
+
+		syncToken := newSourceState.SyncToken
+		icsData, fetchedState, err := sourceClient.FetchCalendar(ctx, syncToken)
+		if err != nil {
+			metrics.SourceErrors.WithLabelValues(sourceURL, "fetch").Inc()
+			s.recordConnError(sourceURL, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("fetch source %s: %w", sourceURL, err)
+			}
+			continue
+		}
+
+		if err := s.store.SetSourceState(sourceURL, toStorageState(fetchedState)); err != nil {
+			s.log.Warnw("Failed to save source state", "source", sourceURL, "error", err)
+		}
+
+		events, err := parseEvents(icsData, s.cfg.Sync.FilterPrivate, prefix)
+		if err != nil {
+			metrics.SourceErrors.WithLabelValues(sourceURL, "parse").Inc()
+			s.recordConnError(sourceURL, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parse events from %s: %w", sourceURL, err)
+			}
+			continue
+		}
+
+		s.log.Infow("Fetched source events", "source", sourceURL, "count", len(events), "filter_private", s.cfg.Sync.FilterPrivate)
+
+		connStart := time.Now()
+		created, updated, deleted, err := s.syncDestination(ctx, destClient, destCfg.Name, events, prefix)
+		if err != nil {
+			s.log.Errorw("Connection sync failed", "source", sourceURL, "dest", destCfg.Name, "error", err)
+			metrics.SyncErrors.WithLabelValues(destCfg.Name, "sync").Inc()
+			metrics.SourceErrors.WithLabelValues(sourceURL, "sync").Inc()
+			s.recordConnError(sourceURL, err)
 			continue
 		}
 
@@ -153,16 +176,32 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		totalUpdated += updated
 		totalDeleted += deleted
 
-		duration := time.Since(destStart).Seconds()
-		metrics.SyncDuration.WithLabelValues(destName, "success").Observe(duration)
-		metrics.EventsSynced.WithLabelValues(destName, "created").Add(float64(created))
-		metrics.EventsSynced.WithLabelValues(destName, "updated").Add(float64(updated))
-		metrics.EventsSynced.WithLabelValues(destName, "deleted").Add(float64(deleted))
-		metrics.LastSyncTimestamp.WithLabelValues(destName).Set(float64(time.Now().Unix()))
-		s.recordDestSuccess(destName, created, updated, deleted, duration)
+		duration := time.Since(connStart).Seconds()
+		metrics.SyncDuration.WithLabelValues(destCfg.Name, "success").Observe(duration)
+		metrics.EventsSynced.WithLabelValues(destCfg.Name, "created").Add(float64(created))
+		metrics.EventsSynced.WithLabelValues(destCfg.Name, "updated").Add(float64(updated))
+		metrics.EventsSynced.WithLabelValues(destCfg.Name, "deleted").Add(float64(deleted))
+		metrics.LastSyncTimestamp.WithLabelValues(destCfg.Name).Set(float64(time.Now().Unix()))
+		metrics.SourceEvents.WithLabelValues(sourceURL).Add(float64(len(events)))
+		metrics.SourceSyncDuration.WithLabelValues(sourceURL, "success").Observe(duration)
+		metrics.SourceLastSyncTimestamp.WithLabelValues(sourceURL).Set(float64(time.Now().Unix()))
+		s.recordConnSuccess(sourceURL, len(events), created, updated, deleted, duration)
 	}
 
 	totalDuration := time.Since(start).Seconds()
+
+	if firstErr != nil {
+		s.recordFailure(firstErr)
+		s.log.Errorw("Sync completed with errors",
+			"duration_sec", totalDuration,
+			"created", totalCreated,
+			"updated", totalUpdated,
+			"deleted", totalDeleted,
+			"error", firstErr,
+		)
+		return firstErr
+	}
+
 	s.recordSuccess(totalDuration)
 	s.log.Infow("Sync completed",
 		"duration_sec", totalDuration,
@@ -174,8 +213,8 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	return nil
 }
 
-func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destName string, events map[string][]byte) (created, updated, deleted int, err error) {
-	existing, err := s.store.ListMappings(destName)
+func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destName string, events map[string][]byte, prefix string) (created, updated, deleted int, err error) {
+	existing, err := s.store.ListMappings(destName, prefix)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("list mappings: %w", err)
 	}
@@ -271,37 +310,28 @@ func (s *Syncer) IsRunning() bool {
 	return s.running
 }
 
-func (s *Syncer) recordError(kind string, err error) {
+func (s *Syncer) recordConnError(url string, err error) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	s.lastError = err.Error()
-	if s.destStats["source"] == nil {
-		s.destStats["source"] = &DestStats{Name: "source"}
-	}
-	s.destStats["source"].Errors++
-}
-
-func (s *Syncer) recordDestError(name string, err error) {
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-	st := s.destStats[name]
+	st := s.connStats[url]
 	if st == nil {
-		st = &DestStats{Name: name}
-		s.destStats[name] = st
+		st = &ConnectionStats{SourceURL: url}
+		s.connStats[url] = st
 	}
 	st.Errors++
 	st.LastError = err.Error()
 }
 
-func (s *Syncer) recordDestSuccess(name string, created, updated, deleted int, duration float64) {
+func (s *Syncer) recordConnSuccess(url string, events, created, updated, deleted int, duration float64) {
 	now := time.Now()
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	st := s.destStats[name]
+	st := s.connStats[url]
 	if st == nil {
-		st = &DestStats{Name: name}
-		s.destStats[name] = st
+		st = &ConnectionStats{SourceURL: url}
+		s.connStats[url] = st
 	}
+	st.Events += int64(events)
 	st.Created += int64(created)
 	st.Updated += int64(updated)
 	st.Deleted += int64(deleted)
@@ -319,6 +349,12 @@ func (s *Syncer) recordSuccess(duration float64) {
 	s.lastDurSec = duration
 }
 
+func (s *Syncer) recordFailure(err error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.lastError = err.Error()
+}
+
 // Status returns a snapshot of the sync state for the web dashboard.
 func (s *Syncer) Status() Status {
 	s.statsMu.Lock()
@@ -326,22 +362,26 @@ func (s *Syncer) Status() Status {
 
 	status := Status{
 		Running:      s.IsRunning(),
-		SourceURL:    s.cfg.Source.URL,
 		Interval:     s.cfg.Sync.Interval,
 		LastSync:     s.lastSync,
 		LastError:    s.lastError,
 		LastDuration: s.lastDurSec,
 	}
-	for _, st := range s.destStats {
-		if st.Name == "source" {
-			continue
-		}
-		status.Destinations = append(status.Destinations, *st)
+	for _, st := range s.connStats {
+		status.Connections = append(status.Connections, *st)
 	}
 	return status
 }
 
-func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
+// sourcePrefix derives a short deterministic hash of the source URL. It is
+// prepended to every UID synced from that source so identical UIDs coming from
+// different sources never collide in a shared destination calendar.
+func sourcePrefix(rawURL string) string {
+	h := sha256.Sum256([]byte(rawURL))
+	return hex.EncodeToString(h[:])[:8]
+}
+
+func parseEvents(data []byte, filterPrivate bool, prefix string) (map[string][]byte, error) {
 	cal, err := ical.NewDecoder(strings.NewReader(string(data))).Decode()
 	if err != nil {
 		return nil, err
@@ -365,6 +405,9 @@ func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
 			}
 		}
 
+		prefixedUID := prefix + "-" + uid
+		comp.Props.SetText("UID", prefixedUID)
+
 		eventCal := ical.NewCalendar()
 		eventCal.Props.SetText(ical.PropProductID, "-//SyncCal//EN")
 		eventCal.Props.SetText(ical.PropVersion, "2.0")
@@ -373,7 +416,7 @@ func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
 		if err := ical.NewEncoder(&buf).Encode(eventCal); err != nil {
 			continue
 		}
-		events[uid] = []byte(buf.String())
+		events[prefixedUID] = []byte(buf.String())
 	}
 	return events, nil
 }

@@ -72,17 +72,17 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 	defer store.Close()
 
 	cfg := &config.Config{
-		Source: config.SourceConfig{
-			URL:      srcURL,
-			Username: "admin",
-			Password: "admin",
-		},
-		Destinations: []config.DestinationConfig{
+		Sources: []config.SourceConfig{
 			{
-				Name:     "nextcloud-dest",
-				URL:      destURL,
+				URL:      srcURL,
 				Username: "admin",
 				Password: "admin",
+				Destination: config.DestinationConfig{
+					Name:     "nextcloud-dest",
+					URL:      destURL,
+					Username: "admin",
+					Password: "admin",
+				},
 			},
 		},
 		Database: config.DatabaseConfig{Path: dbPath},
@@ -97,13 +97,13 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "debug", Format: "console"},
 	}
 
-	sourceClient, err := caldav.NewClient(cfg.Source.URL, cfg.Source.Username, cfg.Source.Password)
+	sourceClient, err := caldav.NewClient(cfg.Sources[0].URL, cfg.Sources[0].Username, cfg.Sources[0].Password)
 	require.NoError(t, err)
 
-	destClient, err := caldav.NewClient(cfg.Destinations[0].URL, cfg.Destinations[0].Username, cfg.Destinations[0].Password)
+	destClient, err := caldav.NewClient(cfg.Sources[0].Destination.URL, cfg.Sources[0].Destination.Username, cfg.Sources[0].Destination.Password)
 	require.NoError(t, err)
 
-	syncer := sync.New(cfg, sourceClient, []*caldav.Client{destClient}, store, log)
+	syncer := sync.New(cfg, []*caldav.Client{sourceClient}, []*caldav.Client{destClient}, store, log)
 
 	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
@@ -124,11 +124,11 @@ END:VCALENDAR`))
 	err = syncer.Sync(syncCtx)
 	require.NoError(t, err)
 
-	mappings, err := store.ListMappings("nextcloud-dest")
+	mappings, err := store.ListMappings("nextcloud-dest", "")
 	require.NoError(t, err)
 	require.Greater(t, len(mappings), 0, "should have synced events")
 
-	sourceState, err := store.GetSourceState(cfg.Source.URL)
+	sourceState, err := store.GetSourceState(cfg.Sources[0].URL)
 	require.NoError(t, err)
 	require.NotEmpty(t, sourceState.CTag)
 
@@ -148,7 +148,7 @@ END:VCALENDAR`))
 	err = syncer.Sync(syncCtx)
 	require.NoError(t, err)
 
-	mappings2, err := store.ListMappings("nextcloud-dest")
+	mappings2, err := store.ListMappings("nextcloud-dest", "")
 	require.NoError(t, err)
 	require.Greater(t, len(mappings2), len(mappings), "second sync should pick up new events")
 	require.Equal(t, len(mappings)+1, len(mappings2), "second sync should not create duplicates")
@@ -248,15 +248,15 @@ END:VCALENDAR`
 	defer store.Close()
 
 	cfg := &config.Config{
-		Source: config.SourceConfig{
-			URL: icsURL,
-		},
-		Destinations: []config.DestinationConfig{
+		Sources: []config.SourceConfig{
 			{
-				Name:     "nextcloud-dest",
-				URL:      destURL,
-				Username: "admin",
-				Password: "admin",
+				URL: icsURL,
+				Destination: config.DestinationConfig{
+					Name:     "nextcloud-dest",
+					URL:      destURL,
+					Username: "admin",
+					Password: "admin",
+				},
 			},
 		},
 		Database: config.DatabaseConfig{Path: dbPath},
@@ -271,13 +271,13 @@ END:VCALENDAR`
 		Logging: config.LoggingConfig{Level: "debug", Format: "console"},
 	}
 
-	sourceClient, err := caldav.NewClient(cfg.Source.URL, cfg.Source.Username, cfg.Source.Password)
+	sourceClient, err := caldav.NewClient(cfg.Sources[0].URL, cfg.Sources[0].Username, cfg.Sources[0].Password)
 	require.NoError(t, err)
 
-	destClient, err := caldav.NewClient(cfg.Destinations[0].URL, cfg.Destinations[0].Username, cfg.Destinations[0].Password)
+	destClient, err := caldav.NewClient(cfg.Sources[0].Destination.URL, cfg.Sources[0].Destination.Username, cfg.Sources[0].Destination.Password)
 	require.NoError(t, err)
 
-	syncer := sync.New(cfg, sourceClient, []*caldav.Client{destClient}, store, log)
+	syncer := sync.New(cfg, []*caldav.Client{sourceClient}, []*caldav.Client{destClient}, store, log)
 
 	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
@@ -285,12 +285,177 @@ END:VCALENDAR`
 	err = syncer.Sync(syncCtx)
 	require.NoError(t, err)
 
-	mappings, err := store.ListMappings("nextcloud-dest")
+	mappings, err := store.ListMappings("nextcloud-dest", "")
 	require.NoError(t, err)
 	require.Equal(t, 1, len(mappings), "should only sync non-private event")
 
 	for uid := range mappings {
 		require.NotEqual(t, "test-event-2@example.com", uid, "private event should be filtered")
+	}
+}
+
+// TestSyncCal_MultiSource verifies that two sources (one public ICS feed, one
+// authenticated CalDAV calendar) sync into the same destination without UID
+// collisions, even when both sources contain an event with the same UID.
+func TestSyncCal_MultiSource(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	// Authenticated CalDAV source.
+	srcContainer, err := startNextcloud(ctx, "src-auth")
+	require.NoError(t, err)
+	defer func() {
+		if err := srcContainer.Terminate(ctx); err != nil {
+			log.Errorw("Failed to terminate source container", "error", err)
+		}
+	}()
+	require.NoError(t, ensurePersonalCalendar(ctx, srcContainer))
+
+	// Public ICS source.
+	publicICS := `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:shared-uid@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240115T100000Z
+DTEND:20240115T110000Z
+SUMMARY:Shared event from public ICS
+END:VEVENT
+BEGIN:VEVENT
+UID:public-only@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240116T100000Z
+DTEND:20240116T110000Z
+SUMMARY:Public only event
+END:VEVENT
+END:VCALENDAR`
+
+	icsContainer, err := startPublicICSServer(ctx, publicICS)
+	require.NoError(t, err)
+	defer func() {
+		if err := icsContainer.Terminate(ctx); err != nil {
+			log.Errorw("Failed to terminate ICS container", "error", err)
+		}
+	}()
+	icsURL, err := getICSURL(ctx, icsContainer)
+	require.NoError(t, err)
+
+	// Destination calendar.
+	destContainer, err := startNextcloud(ctx, "dest-multi")
+	require.NoError(t, err)
+	defer func() {
+		if err := destContainer.Terminate(ctx); err != nil {
+			log.Errorw("Failed to terminate dest container", "error", err)
+		}
+	}()
+	require.NoError(t, ensurePersonalCalendar(ctx, destContainer))
+	destURL, err := getCalDAVURL(ctx, destContainer, "dest-multi")
+	require.NoError(t, err)
+
+	srcURL, err := getCalDAVURL(ctx, srcContainer, "src-auth")
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(t.TempDir(), "synccal.db")
+	store, err := storage.New(dbPath)
+	require.NoError(t, err)
+	defer store.Close()
+
+	cfg := &config.Config{
+		Sources: []config.SourceConfig{
+			{
+				URL: icsURL,
+				Destination: config.DestinationConfig{
+					Name: "nextcloud-dest", URL: destURL, Username: "admin", Password: "admin",
+				},
+			},
+			{
+				URL: srcURL, Username: "admin", Password: "admin",
+				Destination: config.DestinationConfig{
+					Name: "nextcloud-dest", URL: destURL, Username: "admin", Password: "admin",
+				},
+			},
+		},
+		Database: config.DatabaseConfig{Path: dbPath},
+		Sync: config.SyncConfig{
+			Interval:      "0",
+			Timeout:       "2m",
+			BatchSize:     100,
+			DeleteMode:    "soft",
+			FilterPrivate: true,
+		},
+		Metrics: config.MetricsConfig{Addr: ":0"},
+		Logging: config.LoggingConfig{Level: "debug", Format: "console"},
+	}
+
+	publicClient, err := caldav.NewClient(cfg.Sources[0].URL, cfg.Sources[0].Username, cfg.Sources[0].Password)
+	require.NoError(t, err)
+	authClient, err := caldav.NewClient(cfg.Sources[1].URL, cfg.Sources[1].Username, cfg.Sources[1].Password)
+	require.NoError(t, err)
+	destClient, err := caldav.NewClient(cfg.Sources[0].Destination.URL, cfg.Sources[0].Destination.Username, cfg.Sources[0].Destination.Password)
+	require.NoError(t, err)
+
+	syncer := sync.New(cfg, []*caldav.Client{publicClient, authClient}, []*caldav.Client{destClient, destClient}, store, log)
+
+	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+
+	// The authenticated source also contains the same shared UID, plus one of
+	// its own.
+	_, err = authClient.CreateEvent(syncCtx, []byte(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//SyncCal Test//EN
+BEGIN:VEVENT
+UID:shared-uid@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240120T100000Z
+DTEND:20240120T110000Z
+SUMMARY:Shared event from CalDAV
+END:VEVENT
+END:VCALENDAR`))
+	require.NoError(t, err)
+	_, err = authClient.CreateEvent(syncCtx, []byte(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//SyncCal Test//EN
+BEGIN:VEVENT
+UID:auth-only@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240121T100000Z
+DTEND:20240121T110000Z
+SUMMARY:Auth only event
+END:VEVENT
+END:VCALENDAR`))
+	require.NoError(t, err)
+
+	err = syncer.Sync(syncCtx)
+	require.NoError(t, err)
+
+	// 4 distinct events must land in the destination (public-only, auth-only
+	// and the shared UID twice, disambiguated by the per-source prefix).
+	mappings, err := store.ListMappings("nextcloud-dest", "")
+	require.NoError(t, err)
+	require.Equal(t, 4, len(mappings), "both sources should be synced, shared UID disambiguated")
+
+	destRefs, err := destClient.ListEvents(syncCtx)
+	require.NoError(t, err)
+	require.Equal(t, 4, len(destRefs), "destination must hold 4 distinct events, no UID collision")
+
+	// A second run must be idempotent: no duplicates, no cross-source deletions.
+	err = syncer.Sync(syncCtx)
+	require.NoError(t, err)
+	mappings, err = store.ListMappings("nextcloud-dest", "")
+	require.NoError(t, err)
+	require.Equal(t, 4, len(mappings), "second sync must not create duplicates or delete foreign-source events")
+	destRefs, err = destClient.ListEvents(syncCtx)
+	require.NoError(t, err)
+	require.Equal(t, 4, len(destRefs), "second sync must not alter destination contents")
+
+	// Per-source sync state must be stored independently.
+	for _, s := range cfg.Sources {
+		state, err := store.GetSourceState(s.URL)
+		require.NoError(t, err)
+		require.True(t, state.CTag != "" || state.SyncToken != "" || state.ETag != "",
+			"state must be stored per source")
 	}
 }
 

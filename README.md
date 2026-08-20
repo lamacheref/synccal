@@ -34,16 +34,16 @@ calendrier public `.ics` ou authentifié (token / mot de passe d'application) �
 | **1** | MVP Core — config, CalDAV, storage, sync, scheduler | ✅ Terminé | ██████████ 100% |
 | **2** | Robustesse — retry, CTag/sync-token, tests, graceful shutdown | ✅ Terminé | ██████████ 100% |
 | **3** | Interface web (Material Design, light only) | ✅ Terminé | ██████████ 100% |
-| **4** | Multi-sources (base du projet) | 📋 Planifié | ░░░░░░░░░░ 0% |
+| **4** | Multi-sources (base du projet) | ✅ Terminé | ██████████ 100% |
 | **5** | Architecture plugin (principe du projet) | 📋 Planifié | ░░░░░░░░░░ 0% |
 | **6** | Production ready (doc, runbook) | 📋 Planifié | ░░░░░░░░░░ 0% |
 
-> **Progression globale :** `██████████ 50%` — 3/6 sprints terminés
+> **Progression globale :** `██████████ 67%` — 4/6 sprints terminés
 
 ## ✨ Fonctionnalités
 
-- 🔀 **Sources flexibles** : calendrier public (URL `.ics`) **ou** authentifié (token / app password)
-- 🎯 **Multi-destinations** : sync vers plusieurs calendriers en parallèle
+- 🔀 **Connexions 1:1** : chaque source est jumelée à sa propre destination (calendrier public `.ics` ou authentifié token/app password), UID préfixés par source
+- 🎯 **Plusieurs connexions** : plusieurs sources et plusieurs destinations, toujours en paires source → destination
 - ⚡ **Détection de changements efficace** : CTag / sync-token (RFC 6578), repli ETag / hash
 - 🔒 **Filtrage des événements privés** : exclusion `CLASS:PRIVATE` / `CLASS:CONFIDENTIAL`
 - 🛡️ **Robustesse** : retry backoff exponentiel + jitter, respect du header `Retry-After`
@@ -70,22 +70,25 @@ make build
 Copiez `config.example.yaml` vers `config.yaml` et adaptez :
 
 ```yaml
-# Source : publique (sans auth) ...
-source:
-  url: "https://example.com/calendar.ics"
+# Connexions : chaque source est jumelée 1:1 avec sa propre destination
+sources:
+  - url: "https://example.com/calendar.ics"   # source publique (sans auth)
+    # username: "user"                        # ou authentifiée
+    # password: "app-password-or-token"
+    destination:
+      name: "nextcloud-personal"
+      url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
+      username: "user"
+      password: "app-password-or-token"
 
-# ... ou authentifiée (token / app password)
-# source:
-#   url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
-#   username: "user"
-#   password: "app-password-or-token"
-
-# Destinations (authentifiées)
-destinations:
-  - name: "nextcloud-personal"
-    url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
-    username: "user"
-    password: "app-password-or-token"
+  # - url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
+  #   username: "user"
+  #   password: "app-password-or-token"
+  #   destination:
+  #     name: "carbonio-work"
+  #     url: "https://mail.example.com/dav/calendars/user/work/"
+  #     username: "user@domain.com"
+  #     password: "app-password"
 
 sync:
   interval: "1h"          # 30m, 1h, 2h... ("0" = manuel seulement)
@@ -126,7 +129,7 @@ Tous les endpoints suivants sont protégés par le token (`Authorization: Bearer
 | Endpoint | Méthode | Description |
 |----------|---------|-------------|
 | `/` | GET | Application web (dashboard, config, événements, logs) |
-| `/api/status` | GET | Statut de la sync (running, source, dernière sync, destinations) |
+| `/api/status` | GET | Statut de la sync (running, connexions, dernière sync) |
 | `/api/config` | GET | Configuration actuelle (mots de passe masqués) |
 | `/api/config` | PUT | Mise à jour de la configuration (recharge la sync) |
 | `/api/events` | GET | Événements synchronisés (`?dest=<nom>` pour filtrer) |
@@ -135,10 +138,14 @@ Tous les endpoints suivants sont protégés par le token (`Authorization: Bearer
 
 ### Métriques Prometheus
 
-- `synccal_sync_duration_seconds` — durée des syncs (histogramme)
-- `synccal_events_synced_total` — événements créés / mis à jour / supprimés
-- `synccal_sync_errors_total` — erreurs de sync
+- `synccal_sync_duration_seconds` — durée des syncs par destination (histogramme)
+- `synccal_events_synced_total` — événements créés / mis à jour / supprimés par destination
+- `synccal_sync_errors_total` — erreurs de sync par destination
 - `synccal_last_sync_timestamp` — dernière sync réussie par destination
+- `synccal_source_events_total` — événements récupérés par source
+- `synccal_source_errors_total` — erreurs par source
+- `synccal_source_sync_duration_seconds` — durée de sync par source (histogramme)
+- `synccal_source_last_sync_timestamp` — dernière sync réussie par source
 
 ## 🛠️ Développement
 

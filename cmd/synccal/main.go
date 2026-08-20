@@ -40,8 +40,7 @@ func main() {
 	log = logger.Sugar()
 
 	log.Infow("Starting SyncCal",
-		"source", cfg.Source.URL,
-		"destinations", len(cfg.Destinations),
+		"connections", len(cfg.Sources),
 		"interval", cfg.Sync.Interval,
 	)
 
@@ -52,20 +51,22 @@ func main() {
 	defer store.Close()
 
 	newSyncer := func(c *config.Config) (*sync.Syncer, error) {
-		sourceClient, err := caldav.NewClient(c.Source.URL, c.Source.Username, c.Source.Password)
-		if err != nil {
-			return nil, fmt.Errorf("source client: %w", err)
-		}
-
-		destClients := make([]*caldav.Client, len(c.Destinations))
-		for i, d := range c.Destinations {
-			client, err := caldav.NewClient(d.URL, d.Username, d.Password)
+		sourceClients := make([]*caldav.Client, len(c.Sources))
+		destClients := make([]*caldav.Client, len(c.Sources))
+		for i, s := range c.Sources {
+			sc, err := caldav.NewClient(s.URL, s.Username, s.Password)
 			if err != nil {
-				return nil, fmt.Errorf("destination client %q: %w", d.Name, err)
+				return nil, fmt.Errorf("source client %q: %w", s.URL, err)
 			}
-			destClients[i] = client
+			sourceClients[i] = sc
+
+			dc, err := caldav.NewClient(s.Destination.URL, s.Destination.Username, s.Destination.Password)
+			if err != nil {
+				return nil, fmt.Errorf("destination client %q: %w", s.Destination.Name, err)
+			}
+			destClients[i] = dc
 		}
-		return sync.New(c, sourceClient, destClients, store, log), nil
+		return sync.New(c, sourceClients, destClients, store, log), nil
 	}
 
 	syncer, err := newSyncer(cfg)

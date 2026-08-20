@@ -3,15 +3,53 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+let token = localStorage.getItem("synccal_token") || "";
+
 async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers || {});
-  if (window.SYNCCAL_TOKEN) headers["Authorization"] = "Bearer " + window.SYNCCAL_TOKEN;
+  if (token) headers["Authorization"] = "Bearer " + token;
   if (opts.body) headers["Content-Type"] = "application/json";
   const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 401) {
+    requireLogin("Token invalide ou expiré");
+    throw new Error("unauthorized");
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.status + " " + res.statusText);
   return data;
 }
+
+function requireLogin(message) {
+  $("#btn-logout").classList.add("hidden");
+  $("#login-screen").classList.add("show");
+  $("#login-message").textContent = message || "";
+  $("#login-message").classList.toggle("hidden", !message);
+  $("#login-token").value = "";
+  $("#login-token").focus();
+}
+
+function doLogin() {
+  const t = $("#login-token").value.trim();
+  if (!t) return;
+  token = t;
+  localStorage.setItem("synccal_token", t);
+  $("#login-screen").classList.remove("show");
+  $("#btn-logout").classList.remove("hidden");
+  const active = $(".tab.active");
+  switchTab(active ? active.dataset.tab : "dashboard");
+}
+
+function doLogout() {
+  token = "";
+  localStorage.removeItem("synccal_token");
+  requireLogin("Déconnecté. Entrez à nouveau le token pour continuer.");
+}
+
+$("#btn-login").addEventListener("click", doLogin);
+$("#login-token").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+$("#btn-logout").addEventListener("click", doLogout);
 
 let snackTimer = null;
 function snack(message, isError = false) {
@@ -136,7 +174,7 @@ async function loadDashboard() {
   $("#view-dashboard").innerHTML = `
     <div class="grid cols-3">
       <div class="card stat"><div class="value ${state}">${stateLabel}</div><div class="label">État de la synchronisation</div></div>
-      <div class="card stat"><div class="value">${esc(st.source_url)}</div><div class="label">Source</div></div>
+      <div class="card stat"><div class="value text">${esc(st.source_url)}</div><div class="label">Source</div></div>
       <div class="card stat"><div class="value">${esc(st.interval || "manuel")}</div><div class="label">Intervalle</div></div>
       <div class="card stat"><div class="value">${esc(lastSync)}</div><div class="label">Dernière synchronisation</div></div>
       <div class="card stat"><div class="value">${esc(dur)}</div><div class="label">Dernière durée</div></div>
@@ -461,6 +499,8 @@ async function loadLogs() {
 // ---------------------------------------------------------------------------
 
 switchTab("dashboard");
+if (token) $("#btn-logout").classList.remove("hidden");
+else requireLogin();
 setInterval(() => {
-  if ($("#view-dashboard").classList.contains("active")) loadDashboard();
+  if ($("#view-dashboard").classList.contains("active") && token) loadDashboard();
 }, 5000);

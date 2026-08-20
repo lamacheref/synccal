@@ -123,6 +123,13 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px; }
 
 /* Stat cards */
 .stat .value { font-size: 30px; font-weight: 500; color: var(--primary); }
+.stat .value.text {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .stat .label { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
 .stat .value.ok { color: var(--success); }
 .stat .value.err { color: var(--error); }
@@ -242,3 +249,29 @@ tr:hover td { background: #fafafa; }
 }
 .snackbar.show { transform: translate(-50%, 0); }
 .snackbar.error { background: var(--error); }
+
+/* Login overlay */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 16px;
+}
+.overlay.show { display: flex; }
+.login-card {
+  width: 100%;
+  max-width: 380px;
+}
+.login-hint { color: var(--text-secondary); font-size: 14px; margin: 0 0 16px; }
+.login-error {
+  color: var(--error);
+  background: rgba(211, 47, 47, .08);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}

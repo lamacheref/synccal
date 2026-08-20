@@ -103,8 +103,9 @@ func TestAuthRequired(t *testing.T) {
 	rec := doRequest(t, handler, http.MethodGet, "/api/status", "", "")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
+	// Static assets are public so the SPA can prompt for the token.
 	rec = doRequest(t, handler, http.MethodGet, "/", "", "")
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code)
 
 	rec = doRequest(t, handler, http.MethodGet, "/api/status", "", "wrong-token")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -308,12 +309,14 @@ func TestIndexPageSmoke(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "--primary")
 }
 
-func TestIndexPageInjectsToken(t *testing.T) {
+func TestIndexPagePublicWithoutTokenLeak(t *testing.T) {
 	s, _, _ := newTestServer(t, "tok123")
 	handler := s.Handler()
 
-	rec := doRequest(t, handler, http.MethodGet, "/", "", "tok123")
+	// The index page must load without auth and never embed the access token.
+	rec := doRequest(t, handler, http.MethodGet, "/", "", "")
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), `SYNCCAL_TOKEN = "tok123"`)
+	assert.Contains(t, rec.Body.String(), "Authentification requise")
+	assert.NotContains(t, rec.Body.String(), "tok123", "access token must never be embedded in the page")
 	assert.NotContains(t, rec.Body.String(), "__SYNCCAL_TOKEN__")
 }

@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/smiden/synccal/internal/config"
@@ -75,16 +74,18 @@ func New(cfg *config.Config, cfgPath string, store *storage.Store, logs *LogStor
 	}
 }
 
-// Handler returns the full HTTP handler for the web UI and REST API.
+// Handler returns the full HTTP handler for the web UI and REST API. The
+// static assets are served publicly so the SPA can prompt for the token; only
+// the /api/* endpoints require authentication.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/events", s.handleEvents)
-	mux.HandleFunc("/api/logs", s.handleLogs)
-	mux.HandleFunc("/api/sync", s.handleSync)
+	mux.Handle("/api/status", s.auth(http.HandlerFunc(s.handleStatus)))
+	mux.Handle("/api/config", s.auth(http.HandlerFunc(s.handleConfig)))
+	mux.Handle("/api/events", s.auth(http.HandlerFunc(s.handleEvents)))
+	mux.Handle("/api/logs", s.auth(http.HandlerFunc(s.handleLogs)))
+	mux.Handle("/api/sync", s.auth(http.HandlerFunc(s.handleSync)))
 	mux.Handle("/", s.assetHandler())
-	return s.authMiddleware(mux)
+	return mux
 }
 
 // IsRunning reports whether a sync is currently in progress (used by healthz).
@@ -92,7 +93,7 @@ func (s *Server) IsRunning() bool {
 	return s.holder.Get().IsRunning()
 }
 
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
+func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.cfgMu.RLock()
 		token := s.cfg.Web.Token
@@ -266,19 +267,14 @@ func (s *Server) assetHandler() http.Handler {
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter) {
-	s.cfgMu.RLock()
-	token := s.cfg.Web.Token
-	s.cfgMu.RUnlock()
-
 	data, err := assetsFS.ReadFile("assets/index.html")
 	if err != nil {
 		http.Error(w, "index not found", http.StatusInternalServerError)
 		return
 	}
-	page := strings.ReplaceAll(string(data), "__SYNCCAL_TOKEN__", token)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(page))
+	_, _ = w.Write(data)
 }
 
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {

@@ -292,3 +292,13 @@ tr:hover td { background: #fafafa; }
   font-size: 13px;
   margin-bottom: 12px;
 }
+
+/* Confirmation modal */
+.confirm-card {
+  width: 100%;
+  max-width: 380px;
+  padding: 20px;
+}
+.confirm-card h3 { margin: 0 0 8px; font-size: 16px; }
+.confirm-card p { margin: 0 0 16px; color: var(--text-secondary); }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }

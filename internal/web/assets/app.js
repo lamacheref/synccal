@@ -45,11 +45,28 @@ function doLogout() {
   requireLogin("Déconnecté. Entrez à nouveau le token pour continuer.");
 }
 
-$("#btn-login").addEventListener("click", doLogin);
-$("#login-token").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") doLogin();
+// Confirmation modal
+let confirmResolve = null;
+
+function openConfirm(message, onConfirm) {
+  $("#confirm-message").textContent = message;
+  $("#confirm-modal").classList.add("show");
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+  }).then((confirmed) => {
+    if (confirmed && onConfirm) onConfirm();
+  });
+}
+
+$("#confirm-ok").addEventListener("click", () => {
+  $("#confirm-modal").classList.remove("show");
+  if (confirmResolve) confirmResolve(true);
 });
-$("#btn-logout").addEventListener("click", doLogout);
+
+$("#confirm-cancel").addEventListener("click", () => {
+  $("#confirm-modal").classList.remove("show");
+  if (confirmResolve) confirmResolve(false);
+});
 
 let snackTimer = null;
 function snack(message, isError = false) {
@@ -289,9 +306,7 @@ async function loadConfigForm() {
     const btn = e.target.closest('[data-action="delete-source"]');
     if (btn) {
       const card = btn.closest(".card");
-      if (card && confirm("Supprimer cette connexion ?")) {
-        card.remove();
-      }
+      if (card) openConfirm("Supprimer cette connexion ?", () => card.remove());
     }
   });
 }

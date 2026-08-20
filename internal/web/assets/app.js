@@ -213,8 +213,11 @@ async function loadConfigForm() {
   const srcFields = cfg.sources
     .map(
       (s, i) => `
-      <div class="card">
-        <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
+      <div class="card" data-source-index="${i}">
+        <div class="card-header">
+          <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
+          <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-source" title="Supprimer cette connexion">🗑</button>
+        </div>
         <div class="form-grid">
           <div class="field"><label>URL source</label><input data-source="${i}" data-field="url" value="${esc(s.url)}"></div>
           <div class="field"><label>Utilisateur source</label><input data-source="${i}" data-field="username" value="${esc(s.username)}" autocomplete="off"></div>
@@ -280,6 +283,17 @@ async function loadConfigForm() {
 
   $("#btn-add-source").addEventListener("click", () => addSourceCard());
   $("#config-form").addEventListener("submit", saveConfig);
+
+  // Event delegation for delete connection buttons
+  $("#sources").addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="delete-source"]');
+    if (btn) {
+      const card = btn.closest(".card");
+      if (card && confirm("Supprimer cette connexion ?")) {
+        card.remove();
+      }
+    }
+  });
 }
 
 function addSourceCard() {
@@ -287,8 +301,12 @@ function addSourceCard() {
   const i = wrap.querySelectorAll(".card").length;
   const card = document.createElement("div");
   card.className = "card";
+  card.dataset.sourceIndex = i;
   card.innerHTML = `
-    <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
+    <div class="card-header">
+      <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
+      <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-source" title="Supprimer cette connexion">🗑</button>
+    </div>
     <div class="form-grid">
       <div class="field"><label>URL source</label><input data-source="${i}" data-field="url" value=""></div>
       <div class="field"><label>Utilisateur source</label><input data-source="${i}" data-field="username" value="" autocomplete="off"></div>

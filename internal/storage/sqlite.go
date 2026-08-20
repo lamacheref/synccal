@@ -111,6 +111,52 @@ func (s *Store) ListMappings(destName string) (map[string]string, error) {
 	return m, nil
 }
 
+type EventRecord struct {
+	SourceUID   string `json:"source_uid"`
+	DestName    string `json:"dest_name"`
+	DestUID     string `json:"dest_uid"`
+	ContentHash string `json:"content_hash"`
+	SyncedAt    string `json:"synced_at"`
+	Deleted     bool   `json:"deleted"`
+}
+
+// ListEvents returns mapped events, optionally filtered by destination,
+// newest first, with basic pagination.
+func (s *Store) ListEvents(destName string, limit, offset int) ([]EventRecord, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := `SELECT source_uid, dest_name, dest_uid, content_hash, synced_at, deleted
+		FROM event_mapping`
+	args := make([]interface{}, 0, 3)
+	if destName != "" {
+		query += ` WHERE dest_name = ?`
+		args = append(args, destName)
+	}
+	query += ` ORDER BY synced_at DESC, source_uid LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []EventRecord
+	for rows.Next() {
+		var rec EventRecord
+		if err := rows.Scan(&rec.SourceUID, &rec.DestName, &rec.DestUID, &rec.ContentHash, &rec.SyncedAt, &rec.Deleted); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetSourceState(sourceURL string) (*CalendarState, error) {
 	var state CalendarState
 	err := s.db.QueryRow(

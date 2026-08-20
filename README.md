@@ -33,12 +33,12 @@ calendrier public `.ics` ou authentifié (token / mot de passe d'application) �
 |--------|---------|--------|:-----------:|
 | **1** | MVP Core — config, CalDAV, storage, sync, scheduler | ✅ Terminé | ██████████ 100% |
 | **2** | Robustesse — retry, CTag/sync-token, tests, graceful shutdown | ✅ Terminé | ██████████ 100% |
-| **3** | Interface web (Material Design, light only) | 🔴 **Priorité** | ░░░░░░░░░░ 0% |
+| **3** | Interface web (Material Design, light only) | ✅ Terminé | ██████████ 100% |
 | **4** | Multi-sources (base du projet) | 📋 Planifié | ░░░░░░░░░░ 0% |
 | **5** | Architecture plugin (principe du projet) | 📋 Planifié | ░░░░░░░░░░ 0% |
 | **6** | Production ready (doc, runbook) | 📋 Planifié | ░░░░░░░░░░ 0% |
 
-> **Progression globale :** `████████░░ 33%` — 2/6 sprints terminés
+> **Progression globale :** `██████████ 50%` — 3/6 sprints terminés
 
 ## ✨ Fonctionnalités
 
@@ -49,6 +49,7 @@ calendrier public `.ics` ou authentifié (token / mot de passe d'application) �
 - 🛡️ **Robustesse** : retry backoff exponentiel + jitter, respect du header `Retry-After`
 - ⏰ **Sync horaire** : scheduler configurable, lock anti-concurrence
 - 📊 **Observabilité** : logs JSON structurés, métriques Prometheus, `/healthz` + `/readyz`
+- 🖥️ **Interface web** : dashboard, configuration, événements et logs dans le binaire (assets embarqués, Material Design light)
 - 🐳 **Déploiement** : binaire statique Go unique, Docker multi-arch (amd64/arm64)
 
 ## 🚀 Démarrage rapide
@@ -91,6 +92,10 @@ sync:
   timeout: "5m"
   delete_mode: "soft"     # "soft" | "hard"
   filter_private: true    # exclut les événements PRIVATE/CONFIDENTIAL
+
+web:
+  addr: "0.0.0.0:8080"    # interface web + API REST
+  token: "change-me"      # token d'accès à l'UI et à l'API
 ```
 
 > 🔐 **Sécurité** : privilégiez toujours un **token d'application** plutôt qu'un mot de passe de compte (Nextcloud et Carbonio le supportent).
@@ -113,6 +118,20 @@ docker run -d \
 | `GET /healthz` | Liveness — `ok` (503 si sync en cours) |
 | `GET /readyz` | Readiness — `ready` (503 si sync en cours ou DB indisponible) |
 | `GET /metrics` | Métriques Prometheus |
+
+### Interface web & API REST (section `web` de la config)
+
+Tous les endpoints suivants sont protégés par le token (`Authorization: Bearer <token>` ou `X-API-Key: <token>`).
+
+| Endpoint | Méthode | Description |
+|----------|---------|-------------|
+| `/` | GET | Application web (dashboard, config, événements, logs) |
+| `/api/status` | GET | Statut de la sync (running, source, dernière sync, destinations) |
+| `/api/config` | GET | Configuration actuelle (mots de passe masqués) |
+| `/api/config` | PUT | Mise à jour de la configuration (recharge la sync) |
+| `/api/events` | GET | Événements synchronisés (`?dest=<nom>` pour filtrer) |
+| `/api/logs` | GET | Logs structurés capturés (`?level=<niveau>` pour filtrer) |
+| `/api/sync` | POST | Déclenche une synchronisation immédiate |
 
 ### Métriques Prometheus
 
@@ -141,6 +160,7 @@ internal/
   sync/                # logique de synchronisation + scheduler
   retry/               # backoff exponentiel + jitter + Retry-After
   metrics/             # métriques Prometheus
+  web/                 # interface web + API REST (assets embarqués via go:embed)
 tests/integration/     # tests d'intégration Testcontainers
 scripts/               # versioning auto-bumper
 ```

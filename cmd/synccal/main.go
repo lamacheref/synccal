@@ -15,6 +15,7 @@ import (
 	"github.com/smiden/synccal/internal/metrics"
 	"github.com/smiden/synccal/internal/storage"
 	"github.com/smiden/synccal/internal/sync"
+	"github.com/smiden/synccal/internal/web"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -23,7 +24,8 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "Path to config file")
 	flag.Parse()
 
-	logger := newLogger()
+	logStore := web.NewLogStore(1000)
+	logger := newLogger(&config.Config{}) // bootstrap logger, recreated after config load
 	defer logger.Sync()
 	log := logger.Sugar()
 
@@ -31,6 +33,11 @@ func main() {
 	if err != nil {
 		log.Fatalw("Failed to load config", "error", err)
 	}
+
+	logger = newLogger(cfg).WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+		return logStore.Core(core)
+	}))
+	log = logger.Sugar()
 
 	log.Infow("Starting SyncCal",
 		"source", cfg.Source.URL,
@@ -44,38 +51,70 @@ func main() {
 	}
 	defer store.Close()
 
-	sourceClient, err := caldav.NewClient(cfg.Source.URL, cfg.Source.Username, cfg.Source.Password)
-	if err != nil {
-		log.Fatalw("Failed to create source client", "error", err)
-	}
-
-	destClients := make([]*caldav.Client, len(cfg.Destinations))
-	for i, d := range cfg.Destinations {
-		client, err := caldav.NewClient(d.URL, d.Username, d.Password)
+	newSyncer := func(c *config.Config) (*sync.Syncer, error) {
+		sourceClient, err := caldav.NewClient(c.Source.URL, c.Source.Username, c.Source.Password)
 		if err != nil {
-			log.Fatalw("Failed to create destination client", "dest", d.Name, "error", err)
+			return nil, fmt.Errorf("source client: %w", err)
 		}
-		destClients[i] = client
+
+		destClients := make([]*caldav.Client, len(c.Destinations))
+		for i, d := range c.Destinations {
+			client, err := caldav.NewClient(d.URL, d.Username, d.Password)
+			if err != nil {
+				return nil, fmt.Errorf("destination client %q: %w", d.Name, err)
+			}
+			destClients[i] = client
+		}
+		return sync.New(c, sourceClient, destClients, store, log), nil
 	}
 
-	syncer := sync.New(cfg, sourceClient, destClients, store, log)
+	syncer, err := newSyncer(cfg)
+	if err != nil {
+		log.Fatalw("Failed to create syncer", "error", err)
+	}
+
+	holder := web.NewSyncerHolder(syncer)
+	rebuild := func(c *config.Config) (web.Syncer, error) { return newSyncer(c) }
+	webServer := web.New(cfg, *configPath, store, logStore, holder, rebuild, log)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", metrics.Handler())
-	mux.HandleFunc("/healthz", healthHandler(syncer))
-	mux.HandleFunc("/readyz", readyHandler(syncer, store))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if webServer.IsRunning() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "sync in progress")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if webServer.IsRunning() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "sync in progress")
+			return
+		}
+		if err := store.Ping(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "db unavailable")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ready")
+	})
+	mux.Handle("/", webServer.Handler())
 
 	server := &http.Server{
-		Addr:         cfg.Metrics.Addr,
+		Addr:         cfg.Web.Addr,
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
 	serverErrCh := make(chan error, 1)
 	go func() {
-		log.Infow("Metrics/Health server starting", "addr", cfg.Metrics.Addr)
+		log.Infow("HTTP server starting", "addr", cfg.Web.Addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErrCh <- err
 		}
@@ -103,7 +142,7 @@ func main() {
 	}
 
 	log.Info("Shutting down...")
-	syncer.Stop()
+	holder.Get().Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -114,12 +153,12 @@ func main() {
 		log.Info("HTTP server stopped")
 	}
 
-	waitForSyncCompletion(shutdownCtx, syncer, log)
+	waitForSyncCompletion(shutdownCtx, holder, log)
 
 	log.Info("Graceful shutdown complete")
 }
 
-func waitForSyncCompletion(ctx context.Context, syncer *sync.Syncer, log *zap.SugaredLogger) {
+func waitForSyncCompletion(ctx context.Context, holder *web.SyncerHolder, log *zap.SugaredLogger) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -129,7 +168,7 @@ func waitForSyncCompletion(ctx context.Context, syncer *sync.Syncer, log *zap.Su
 			log.Warn("Shutdown timeout exceeded, forcing exit")
 			return
 		case <-ticker.C:
-			if !syncer.IsRunning() {
+			if !holder.Get().IsRunning() {
 				log.Info("Sync completed, safe to exit")
 				return
 			}
@@ -138,42 +177,26 @@ func waitForSyncCompletion(ctx context.Context, syncer *sync.Syncer, log *zap.Su
 	}
 }
 
-func newLogger() *zap.Logger {
-	cfg := zap.NewProductionConfig()
-	cfg.EncoderConfig.TimeKey = "timestamp"
-	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	cfg.EncoderConfig.LevelKey = "level"
-	cfg.EncoderConfig.MessageKey = "message"
-	cfg.DisableStacktrace = true
-	logger, _ := cfg.Build()
+func newLogger(cfg *config.Config) *zap.Logger {
+	zapCfg := zap.NewProductionConfig()
+	if cfg.Logging.Format == "console" {
+		zapCfg = zap.NewDevelopmentConfig()
+		zapCfg.EncoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
+	}
+	zapCfg.EncoderConfig.TimeKey = "timestamp"
+	zapCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	zapCfg.EncoderConfig.LevelKey = "level"
+	zapCfg.EncoderConfig.MessageKey = "message"
+	zapCfg.DisableStacktrace = true
+
+	level := zapcore.InfoLevel
+	if cfg.Logging.Level != "" {
+		if lvl, err := zapcore.ParseLevel(cfg.Logging.Level); err == nil {
+			level = lvl
+		}
+	}
+	zapCfg.Level = zap.NewAtomicLevelAt(level)
+
+	logger, _ := zapCfg.Build()
 	return logger
-}
-
-func healthHandler(syncer *sync.Syncer) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if syncer.IsRunning() {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "sync in progress")
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ok")
-	}
-}
-
-func readyHandler(syncer *sync.Syncer, store *storage.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if syncer.IsRunning() {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "sync in progress")
-			return
-		}
-		if err := store.Ping(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "db unavailable")
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ready")
-	}
 }

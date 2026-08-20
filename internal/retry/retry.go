@@ -2,6 +2,8 @@ package retry
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"net/http"
@@ -9,13 +11,13 @@ import (
 )
 
 type Config struct {
-	MaxAttempts      int
-	BaseDelay        time.Duration
-	MaxDelay         time.Duration
-	Multiplier       float64
-	JitterFactor     float64
-	RetryableStatus  []int
-	RetryableErrors  []error
+	MaxAttempts     int
+	BaseDelay       time.Duration
+	MaxDelay        time.Duration
+	Multiplier      float64
+	JitterFactor    float64
+	RetryableStatus []int
+	RetryableErrors []error
 }
 
 func DefaultConfig() Config {
@@ -72,9 +74,12 @@ func DoWithRetryAfter(ctx context.Context, cfg Config, fn func() (*http.Response
 	for attempt := 0; attempt < cfg.MaxAttempts; attempt++ {
 		resp, err := fn()
 		if err == nil {
-			if resp != nil && isStatusRetryable(resp.StatusCode, cfg) {
-				retryAfter := parseRetryAfter(resp)
-				if retryAfter > 0 {
+			if resp != nil && resp.StatusCode >= 400 {
+				lastErr = &statusError{status: resp.StatusCode}
+				if !isStatusRetryable(resp.StatusCode, cfg) {
+					return lastErr
+				}
+				if retryAfter := parseRetryAfter(resp); retryAfter > 0 {
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
@@ -82,11 +87,9 @@ func DoWithRetryAfter(ctx context.Context, cfg Config, fn func() (*http.Response
 						continue
 					}
 				}
-			}
-			if resp != nil && resp.StatusCode < 400 {
+			} else {
 				return nil
 			}
-			lastErr = err
 		} else {
 			lastErr = err
 			if !isErrorRetryable(err, cfg) {
@@ -129,19 +132,27 @@ func calculateDelay(attempt int, cfg Config) time.Duration {
 }
 
 func isRetryable(err error, cfg Config) bool {
-	if isErrorRetryable(err, cfg) {
-		return true
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
 	}
-	return false
+	for _, re := range cfg.RetryableErrors {
+		if err.Error() == re.Error() {
+			return false
+		}
+	}
+	return true
 }
 
 func isErrorRetryable(err error, cfg Config) bool {
-	for _, re := range cfg.RetryableErrors {
-		if err == re {
-			return true
-		}
-	}
-	return false
+	return isRetryable(err, cfg)
+}
+
+type statusError struct {
+	status int
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("HTTP status %d", e.status)
 }
 
 func isStatusRetryable(status int, cfg Config) bool {

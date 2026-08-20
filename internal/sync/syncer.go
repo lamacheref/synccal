@@ -18,6 +18,27 @@ import (
 	"go.uber.org/zap"
 )
 
+type DestStats struct {
+	Name         string     `json:"name"`
+	Created      int64      `json:"created"`
+	Updated      int64      `json:"updated"`
+	Deleted      int64      `json:"deleted"`
+	Errors       int64      `json:"errors"`
+	LastSync     *time.Time `json:"last_sync,omitempty"`
+	LastError    string     `json:"last_error,omitempty"`
+	LastDuration float64    `json:"last_duration_sec,omitempty"`
+}
+
+type Status struct {
+	Running      bool        `json:"running"`
+	SourceURL    string      `json:"source_url"`
+	Interval     string      `json:"interval"`
+	LastSync     *time.Time  `json:"last_sync,omitempty"`
+	LastError    string      `json:"last_error,omitempty"`
+	LastDuration float64     `json:"last_duration_sec,omitempty"`
+	Destinations []DestStats `json:"destinations"`
+}
+
 type Syncer struct {
 	cfg          *config.Config
 	source       *caldav.Client
@@ -27,16 +48,28 @@ type Syncer struct {
 	scheduler    *cron.Cron
 	mu           sync.Mutex
 	running      bool
+
+	statsMu    sync.Mutex
+	destStats  map[string]*DestStats
+	lastSync   *time.Time
+	lastError  string
+	lastDurSec float64
 }
 
 func New(cfg *config.Config, source *caldav.Client, dests []*caldav.Client, store *storage.Store, log *zap.SugaredLogger) *Syncer {
-	return &Syncer{
+	s := &Syncer{
 		cfg:          cfg,
 		source:       source,
 		destinations: dests,
 		store:        store,
 		log:          log,
+		destStats:    make(map[string]*DestStats),
 	}
+	for i := range cfg.Destinations {
+		name := cfg.Destinations[i].Name
+		s.destStats[name] = &DestStats{Name: name}
+	}
+	return s
 }
 
 func (s *Syncer) Sync(ctx context.Context) error {
@@ -64,9 +97,10 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		sourceState = &storage.CalendarState{}
 	}
 
-	changed, newSourceState, err := s.source.HasChanged(ctx, sourceState)
+	changed, newSourceState, err := s.source.HasChanged(ctx, toCalDAVState(sourceState))
 	if err != nil {
 		metrics.SyncErrors.WithLabelValues("source", "check_change").Inc()
+		s.recordError("check_change", err)
 		return fmt.Errorf("check source changes: %w", err)
 	}
 
@@ -84,16 +118,18 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	icsData, fetchedState, err := s.source.FetchCalendar(ctx, syncToken)
 	if err != nil {
 		metrics.SyncErrors.WithLabelValues("source", "fetch").Inc()
+		s.recordError("fetch", err)
 		return fmt.Errorf("fetch source: %w", err)
 	}
 
-	if err := s.store.SetSourceState(s.cfg.Source.URL, fetchedState); err != nil {
+	if err := s.store.SetSourceState(s.cfg.Source.URL, toStorageState(fetchedState)); err != nil {
 		s.log.Warnw("Failed to save source state", "error", err)
 	}
 
 	events, err := parseEvents(icsData, s.cfg.Sync.FilterPrivate)
 	if err != nil {
 		metrics.SyncErrors.WithLabelValues("source", "parse").Inc()
+		s.recordError("parse", err)
 		return fmt.Errorf("parse events: %w", err)
 	}
 
@@ -109,6 +145,7 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		if err != nil {
 			s.log.Errorw("Destination sync failed", "dest", destName, "error", err)
 			metrics.SyncErrors.WithLabelValues(destName, "sync").Inc()
+			s.recordDestError(destName, err)
 			continue
 		}
 
@@ -122,9 +159,11 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		metrics.EventsSynced.WithLabelValues(destName, "updated").Add(float64(updated))
 		metrics.EventsSynced.WithLabelValues(destName, "deleted").Add(float64(deleted))
 		metrics.LastSyncTimestamp.WithLabelValues(destName).Set(float64(time.Now().Unix()))
+		s.recordDestSuccess(destName, created, updated, deleted, duration)
 	}
 
 	totalDuration := time.Since(start).Seconds()
+	s.recordSuccess(totalDuration)
 	s.log.Infow("Sync completed",
 		"duration_sec", totalDuration,
 		"created", totalCreated,
@@ -232,6 +271,76 @@ func (s *Syncer) IsRunning() bool {
 	return s.running
 }
 
+func (s *Syncer) recordError(kind string, err error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.lastError = err.Error()
+	if s.destStats["source"] == nil {
+		s.destStats["source"] = &DestStats{Name: "source"}
+	}
+	s.destStats["source"].Errors++
+}
+
+func (s *Syncer) recordDestError(name string, err error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	st := s.destStats[name]
+	if st == nil {
+		st = &DestStats{Name: name}
+		s.destStats[name] = st
+	}
+	st.Errors++
+	st.LastError = err.Error()
+}
+
+func (s *Syncer) recordDestSuccess(name string, created, updated, deleted int, duration float64) {
+	now := time.Now()
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	st := s.destStats[name]
+	if st == nil {
+		st = &DestStats{Name: name}
+		s.destStats[name] = st
+	}
+	st.Created += int64(created)
+	st.Updated += int64(updated)
+	st.Deleted += int64(deleted)
+	st.LastError = ""
+	st.LastSync = &now
+	st.LastDuration = duration
+}
+
+func (s *Syncer) recordSuccess(duration float64) {
+	now := time.Now()
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.lastSync = &now
+	s.lastError = ""
+	s.lastDurSec = duration
+}
+
+// Status returns a snapshot of the sync state for the web dashboard.
+func (s *Syncer) Status() Status {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+
+	status := Status{
+		Running:      s.IsRunning(),
+		SourceURL:    s.cfg.Source.URL,
+		Interval:     s.cfg.Sync.Interval,
+		LastSync:     s.lastSync,
+		LastError:    s.lastError,
+		LastDuration: s.lastDurSec,
+	}
+	for _, st := range s.destStats {
+		if st.Name == "source" {
+			continue
+		}
+		status.Destinations = append(status.Destinations, *st)
+	}
+	return status
+}
+
 func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
 	cal, err := ical.NewDecoder(strings.NewReader(string(data))).Decode()
 	if err != nil {
@@ -244,22 +353,26 @@ func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
 			continue
 		}
 
-		uid := comp.Props.Get("UID")
-		if uid == "" {
+		uid, err := comp.Props.Text("UID")
+		if err != nil || uid == "" {
 			continue
 		}
 
 		if filterPrivate {
-			class := comp.Props.Get("CLASS")
+			class, _ := comp.Props.Text("CLASS")
 			if class == "PRIVATE" || class == "CONFIDENTIAL" {
 				continue
 			}
 		}
 
 		eventCal := ical.NewCalendar()
+		eventCal.Props.SetText(ical.PropProductID, "-//SyncCal//EN")
+		eventCal.Props.SetText(ical.PropVersion, "2.0")
 		eventCal.Children = []*ical.Component{comp}
 		var buf strings.Builder
-		ical.NewEncoder(&buf).Encode(eventCal)
+		if err := ical.NewEncoder(&buf).Encode(eventCal); err != nil {
+			continue
+		}
 		events[uid] = []byte(buf.String())
 	}
 	return events, nil
@@ -268,4 +381,18 @@ func parseEvents(data []byte, filterPrivate bool) (map[string][]byte, error) {
 func hashContent(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
+}
+
+func toCalDAVState(s *storage.CalendarState) *caldav.CalendarState {
+	if s == nil {
+		return &caldav.CalendarState{}
+	}
+	return &caldav.CalendarState{CTag: s.CTag, SyncToken: s.SyncToken, ETag: s.ETag}
+}
+
+func toStorageState(s *caldav.CalendarState) *storage.CalendarState {
+	if s == nil {
+		return &storage.CalendarState{}
+	}
+	return &storage.CalendarState{CTag: s.CTag, SyncToken: s.SyncToken, ETag: s.ETag}
 }

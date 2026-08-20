@@ -14,7 +14,6 @@ import (
 	"github.com/smiden/synccal/internal/sync"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/nextcloud"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -50,6 +49,7 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 			log.Errorw("Failed to terminate source container", "error", err)
 		}
 	}()
+	require.NoError(t, ensurePersonalCalendar(ctx, srcContainer))
 
 	destContainer, err := startNextcloud(ctx, "dest")
 	require.NoError(t, err)
@@ -58,6 +58,7 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 			log.Errorw("Failed to terminate dest container", "error", err)
 		}
 	}()
+	require.NoError(t, ensurePersonalCalendar(ctx, destContainer))
 
 	srcURL, err := getCalDAVURL(ctx, srcContainer, "source")
 	require.NoError(t, err)
@@ -107,6 +108,19 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
 
+	_, err = sourceClient.CreateEvent(syncCtx, []byte(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//SyncCal Test//EN
+BEGIN:VEVENT
+UID:first-event@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240115T100000Z
+DTEND:20240115T110000Z
+SUMMARY:First event
+END:VEVENT
+END:VCALENDAR`))
+	require.NoError(t, err)
+
 	err = syncer.Sync(syncCtx)
 	require.NoError(t, err)
 
@@ -118,27 +132,53 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, sourceState.CTag)
 
+	_, err = sourceClient.CreateEvent(syncCtx, []byte(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//SyncCal Test//EN
+BEGIN:VEVENT
+UID:second-event@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240116T100000Z
+DTEND:20240116T110000Z
+SUMMARY:Second event
+END:VEVENT
+END:VCALENDAR`))
+	require.NoError(t, err)
+
 	err = syncer.Sync(syncCtx)
 	require.NoError(t, err)
 
 	mappings2, err := store.ListMappings("nextcloud-dest")
 	require.NoError(t, err)
-	require.Equal(t, len(mappings), len(mappings2), "second sync should not create duplicates")
+	require.Greater(t, len(mappings2), len(mappings), "second sync should pick up new events")
+	require.Equal(t, len(mappings)+1, len(mappings2), "second sync should not create duplicates")
 }
 
 func startNextcloud(ctx context.Context, name string) (testcontainers.Container, error) {
-	return nextcloud.Run(ctx,
-		"nextcloud:28-apache",
-		nextcloud.WithAdminUsername("admin"),
-		nextcloud.WithAdminPassword("admin"),
-		testcontainers.WithWaitStrategy(
-			wait.ForHTTP("/status.php").
+	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "nextcloud:28-apache",
+			ExposedPorts: []string{"80/tcp"},
+			Env: map[string]string{
+				"NEXTCLOUD_ADMIN_USER":     "admin",
+				"NEXTCLOUD_ADMIN_PASSWORD": "admin",
+				"SQLITE_DATABASE":          "synccal",
+			},
+			WaitingFor: wait.ForHTTP("/status.php").
 				WithStartupTimeout(120 * time.Second).
-				WithPollInterval(2 * time.Second)),
-		testcontainers.WithEnv(map[string]string{
-			"NEXTCLOUD_TRUSTED_DOMAINS": "localhost",
-		}),
+				WithPollInterval(2 * time.Second),
+		},
+		Started: true,
+	})
+}
+
+// ensurePersonalCalendar creates the default "personal" calendar for the admin
+// user, which is not provisioned by the automatic install.
+func ensurePersonalCalendar(ctx context.Context, c testcontainers.Container) error {
+	_, _, err := c.Exec(ctx,
+		[]string{"su", "www-data", "-s", "/bin/sh", "-c", "php occ dav:create-calendar admin personal"},
 	)
+	return err
 }
 
 func getCalDAVURL(ctx context.Context, c testcontainers.Container, name string) (string, error) {
@@ -164,6 +204,7 @@ func TestSyncCal_PublicICSToNextcloud(t *testing.T) {
 			log.Errorw("Failed to terminate dest container", "error", err)
 		}
 	}()
+	require.NoError(t, ensurePersonalCalendar(ctx, destContainer))
 
 	destURL, err := getCalDAVURL(ctx, destContainer, "dest-public")
 	require.NoError(t, err)

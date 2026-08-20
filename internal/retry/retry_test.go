@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestDo_Success(t *testing.T) {
@@ -63,7 +62,7 @@ func TestDo_NonRetryableError(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MaxAttempts = 3
 	cfg.BaseDelay = 10 * time.Millisecond
-	cfg.RetryableErrors = []error{errors.New("retryable")}
+	cfg.RetryableErrors = []error{errors.New("non-retryable")}
 
 	callCount := 0
 	err := Do(context.Background(), cfg, func() error {
@@ -161,8 +160,8 @@ func TestParseRetryAfter_Seconds(t *testing.T) {
 }
 
 func TestParseRetryAfter_HTTPDate(t *testing.T) {
-	future := time.Now().Add(10 * time.Second).Format(http.TimeFormat)
-	resp := &http.Response{Header: http.Header{"Retry-After": {future}}}
+	future := time.Now().UTC().Add(10 * time.Second)
+	resp := &http.Response{Header: http.Header{"Retry-After": {future.Format(http.TimeFormat)}}}
 	d := parseRetryAfter(resp)
 	assert.True(t, d > 0)
 	assert.True(t, d <= 11*time.Second)

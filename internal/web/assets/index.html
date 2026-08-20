@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SyncCal</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="app-bar">
+    <div class="app-bar-inner">
+      <div class="brand">
+        <span class="brand-logo">&#128197;</span>
+        <div>
+          <h1>SyncCal</h1>
+          <span class="brand-sub">Synchroniseur de calendriers</span>
+        </div>
+      </div>
+      <div class="app-bar-actions">
+        <span id="run-indicator" class="run-badge hidden">Sync en cours&#8230;</span>
+        <button id="btn-sync" class="btn btn-primary">Synchroniser maintenant</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="dashboard">Dashboard</button>
+    <button class="tab" data-tab="config">Configuration</button>
+    <button class="tab" data-tab="events">Événements</button>
+    <button class="tab" data-tab="logs">Logs</button>
+  </nav>
+
+  <main id="content">
+    <section id="view-dashboard" class="view active"></section>
+    <section id="view-config" class="view"></section>
+    <section id="view-events" class="view"></section>
+    <section id="view-logs" class="view"></section>
+  </main>
+
+  <div id="snackbar" class="snackbar"></div>
+
+  <script>
+    window.SYNCCAL_TOKEN = "__SYNCCAL_TOKEN__";
+  </script>
+  <script src="/app.js"></script>
+</body>
+</html>

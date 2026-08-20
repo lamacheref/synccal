@@ -41,6 +41,11 @@ sync:
 metrics:
   addr: ":8080"
 
+# Web interface & REST API
+web:
+  addr: ":8080"        # Listen address (defaults to metrics.addr if empty)
+  token: ""            # Access token for the UI/API ("" = open, set a token to protect)
+
 # Logging
 logging:
   level: "info"           # debug, info, warn, error

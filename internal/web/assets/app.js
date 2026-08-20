@@ -301,8 +301,8 @@ async function loadConfigForm() {
   $("#btn-add-source").addEventListener("click", () => addSourceCard());
   $("#config-form").addEventListener("submit", saveConfig);
 
-  // Event delegation for delete connection buttons
-  $("#sources").addEventListener("click", (e) => {
+  // Event delegation for delete connection buttons (on document for robustness)
+  document.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="delete-source"]');
     if (btn) {
       const card = btn.closest(".card");

@@ -249,8 +249,8 @@ Voir [TODO.md](TODO.md), [ROADMAP.md](ROADMAP.md), [PROJET.md](PROJET.md) et [CH
 
 | Dépôt | URL | Rôle |
 |-------|-----|------|
-| **GitHub** | `git@github.com:lamacheref/synccal.git` | CI/CD + **bump de version** + releases |
-| **Gitea** | `ssh://gitea@gitea.smiden.eu:2222/flamachere/synccal.git` | CI/CD build image Docker |
+| **GitHub** | `git@github.com:lamacheref/synccal.git` | CI/CD + **bump de version** + releases + image `ghcr.io/lamacheref/synccal` |
+| **Gitea** | `ssh://gitea@gitea.smiden.eu:2222/flamachere/synccal.git` | CI/CD + image `gitea.smiden.eu/flamachere/synccal` |
 
 ## 📄 Licence
 

@@ -26,12 +26,12 @@ pipeline:
   docker:
     image: docker.io/plugins/docker:latest
     settings:
-      registry: dockhand.example.com
+      registry: gitea.smiden.eu
       username:
-        from_secret: DOCKHAND_USERNAME
+        from_secret: REGISTRY_USERNAME
       password:
-        from_secret: DOCKHAND_PASSWORD
-      repo: dockhand.example.com/synccal
+        from_secret: REGISTRY_PASSWORD
+      repo: gitea.smiden.eu/flamachere/synccal
       tags:
         - latest
         - main

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,13 +26,13 @@ type mockSource struct {
 	data        []byte
 	errChanged  error
 	errFetch    error
-	callsChange int
-	callsFetch  int
+	callsChange atomic.Int64 // atomique : lu par le test pendant que le cron exécute Sync
+	callsFetch  atomic.Int64
 }
 
 func (m *mockSource) Type() string { return "mock" }
 func (m *mockSource) HasChanged(_ context.Context, _ *plugin.CalendarState) (bool, *plugin.CalendarState, error) {
-	m.callsChange++
+	m.callsChange.Add(1)
 	if m.errChanged != nil {
 		return false, nil, m.errChanged
 	}
@@ -41,7 +42,7 @@ func (m *mockSource) HasChanged(_ context.Context, _ *plugin.CalendarState) (boo
 	return m.changed, m.state, nil
 }
 func (m *mockSource) Fetch(_ context.Context, _ string) ([]byte, *plugin.CalendarState, error) {
-	m.callsFetch++
+	m.callsFetch.Add(1)
 	if m.errFetch != nil {
 		return nil, nil, m.errFetch
 	}
@@ -220,8 +221,8 @@ func TestSync_UnchangedSourceSkipped(t *testing.T) {
 	env := newTestEnv(t, false)
 	env.source.changed = false
 	require.NoError(t, env.syncer.Sync(context.Background()))
-	assert.Equal(t, 1, env.source.callsChange)
-	assert.Equal(t, 0, env.source.callsFetch, "unchanged source must not be fetched")
+	assert.EqualValues(t, 1, env.source.callsChange.Load())
+	assert.EqualValues(t, 0, env.source.callsFetch.Load(), "unchanged source must not be fetched")
 	assert.Empty(t, env.dest.created)
 }
 
@@ -519,15 +520,15 @@ func TestStartScheduler_JobExecutes(t *testing.T) {
 	require.NotNil(t, s.scheduler)
 	defer s.Stop()
 
-	// Attendre au moins deux ticks du cron
-	deadline := time.Now().Add(2 * time.Second)
+	// Attendre au moins deux ticks du cron (large : -race ralentit l'exécution)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if env.source.callsChange >= 2 {
+		if env.source.callsChange.Load() >= 2 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	assert.GreaterOrEqual(t, env.source.callsChange, 2,
+	assert.GreaterOrEqual(t, env.source.callsChange.Load(), int64(2),
 		"la closure planifiée doit exécuter Sync à chaque tick")
 }
 

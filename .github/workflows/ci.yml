@@ -41,8 +41,11 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v1.64.8
           golangci-lint run ./...
 
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
+      - name: Run unit tests (coverage)
+        run: go test -v -race -coverprofile=coverage.out ./internal/...
+
+      - name: Run integration tests (skipped without Docker)
+        run: go test -v ./tests/integration/...
 
       - name: Enforce coverage >= 90% (internal packages)
         run: |

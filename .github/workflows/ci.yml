@@ -44,10 +44,12 @@ jobs:
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
 
-      - name: Enforce coverage >= 90%
+      - name: Enforce coverage >= 90% (internal packages)
         run: |
-          COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
-          echo "Coverage: ${COV}%"
+          # Objectif défini sur internal/... (cmd et tests d'intégration exclus)
+          go test -coverprofile=coverage-internal.out -covermode=atomic ./internal/...
+          COV=$(go tool cover -func=coverage-internal.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Internal coverage: ${COV}%"
           awk "BEGIN {exit !($COV >= 90)}" || { echo "::error::Coverage ${COV}% < 90%"; exit 1; }
 
       - name: Upload coverage

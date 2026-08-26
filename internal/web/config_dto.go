@@ -77,21 +77,21 @@ type transformerUpdate struct {
 }
 
 type sourceUpdate struct {
-	Name         string               `json:"name"`
-	Type         string               `json:"type"`
-	URL          string               `json:"url"`
-	Username     string               `json:"username"`
-	Password     *string              `json:"password"`
+	Name         string              `json:"name"`
+	Type         string              `json:"type"`
+	URL          string              `json:"url"`
+	Username     string              `json:"username"`
+	Password     *string             `json:"password"`
 	Transformers []transformerUpdate `json:"transformers"`
 }
 
 type destinationUpdate struct {
-	Name         string               `json:"name"`
-	Type         string               `json:"type"`
-	URL          string               `json:"url"`
-	Username     string               `json:"username"`
-	Password     *string              `json:"password"`
-	Source       string               `json:"source"`
+	Name         string              `json:"name"`
+	Type         string              `json:"type"`
+	URL          string              `json:"url"`
+	Username     string              `json:"username"`
+	Password     *string             `json:"password"`
+	Source       string              `json:"source"`
 	Transformers []transformerUpdate `json:"transformers"`
 }
 

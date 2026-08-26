@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/smiden/synccal/internal/caldav"
-	"github.com/smiden/synccal/internal/plugin"
 	"github.com/smiden/synccal/internal/config"
+	"github.com/smiden/synccal/internal/plugin"
 	"github.com/smiden/synccal/internal/storage"
 	"github.com/smiden/synccal/internal/sync"
 	"github.com/stretchr/testify/require"

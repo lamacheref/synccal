@@ -8,6 +8,8 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Non publié]
 
 ### Ajouté
+- **Sprint 6 - Production Ready** : `docs/DEPLOYMENT.md` (guide systemd/docker-compose/k8s), artefacts `deploy/` (unit systemd durcie, compose prod, manifests k8s), `docs/RUNBOOK.md` (dépannage, sauvegarde/restauration, rollback), seuil couverture ≥90% en CI (GitHub + Woodpecker)
+- Licence propriétaire SMiDeN 2026 (`LICENSE`, badge + section README)
 - **Sprint 5 - Architecture Plugin** : interfaces `SourceConnector`/`DestinationConnector`/`EventTransformer`, registry `internal/plugin` (Register/New/ListAll), CalDAV natif en plugin `caldav`/`ics`, 5 transformers (`filter-private`, `mask-private`, `prefix-uid` auto, `filter-category`, `prefix-summary`) + `Pipeline`
 - Config par plugin : `type` + `transformers: [{type, options}]` par source/destination, defaults `caldav`, validation, migration legacy
 - API `GET /api/plugins` (auth requise) listant tous les plugins avec `type/kind/name/description`

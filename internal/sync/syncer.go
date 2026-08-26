@@ -377,13 +377,16 @@ func (s *Syncer) StartScheduler() {
 	s.scheduler = cron.New()
 	interval := s.cfg.Sync.IntervalDuration()
 	if interval > 0 {
-		s.scheduler.AddFunc("@every "+interval.String(), func() {
+		if _, err := s.scheduler.AddFunc("@every "+interval.String(), func() {
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Sync.TimeoutDuration())
 			defer cancel()
 			if err := s.Sync(ctx); err != nil {
 				s.log.Errorw("Scheduled sync failed", "error", err)
 			}
-		})
+		}); err != nil {
+			s.log.Errorw("Failed to schedule sync job", "error", err)
+			return
+		}
 		s.scheduler.Start()
 		s.log.Infow("Scheduler started", "interval", interval)
 	}

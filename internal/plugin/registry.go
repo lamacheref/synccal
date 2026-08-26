@@ -34,13 +34,13 @@ type DestinationConfig struct {
 }
 
 var (
-	mu                    sync.RWMutex
-	sourceFactories       = make(map[string]SourceFactory)
-	destinationFactories  = make(map[string]DestinationFactory)
-	transformerFactories  = make(map[string]TransformerFactory)
-	sourceInfos           = make(map[string]PluginInfo)
-	destinationInfos      = make(map[string]PluginInfo)
-	transformerInfos      = make(map[string]PluginInfo)
+	mu                   sync.RWMutex
+	sourceFactories      = make(map[string]SourceFactory)
+	destinationFactories = make(map[string]DestinationFactory)
+	transformerFactories = make(map[string]TransformerFactory)
+	sourceInfos          = make(map[string]PluginInfo)
+	destinationInfos     = make(map[string]PluginInfo)
+	transformerInfos     = make(map[string]PluginInfo)
 )
 
 // RegisterSource registers a source connector factory.

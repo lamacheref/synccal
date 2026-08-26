@@ -164,13 +164,13 @@ func cloneComponent(comp *ical.Component) *ical.Component {
 
 func init() {
 	RegisterTransformer("filter-private", PluginInfo{
-		Name: "Filtre PRIVATE/CONFIDENTIAL",
+		Name:        "Filtre PRIVATE/CONFIDENTIAL",
 		Description: "Exclut les événements avec CLASS:PRIVATE ou CLASS:CONFIDENTIAL",
 	}, func(options map[string]string) (EventTransformer, error) {
 		return &FilterPrivateTransformer{}, nil
 	})
 	RegisterTransformer("mask-private", PluginInfo{
-		Name: "Masquage PRIVATE",
+		Name:        "Masquage PRIVATE",
 		Description: "Conserve l'événement mais masque SUMMARY/DESCRIPTION/LOCATION",
 	}, func(options map[string]string) (EventTransformer, error) {
 		prefix := options["summary"]
@@ -180,7 +180,7 @@ func init() {
 		return &MaskPrivateTransformer{MaskSummary: prefix}, nil
 	})
 	RegisterTransformer("prefix-uid", PluginInfo{
-		Name: "Préfixe UID",
+		Name:        "Préfixe UID",
 		Description: "Préfixe l'UID avec le hash de la source pour éviter les collisions",
 	}, func(options map[string]string) (EventTransformer, error) {
 		prefix := options["prefix"]
@@ -193,7 +193,7 @@ func init() {
 		return &PrefixTransformer{Prefix: prefix}, nil
 	})
 	RegisterTransformer("filter-category", PluginInfo{
-		Name: "Filtre par catégorie",
+		Name:        "Filtre par catégorie",
 		Description: "Ne conserve que les événements dont CATEGORIES est dans la liste autorisée",
 	}, func(options map[string]string) (EventTransformer, error) {
 		allowed := make(map[string]bool)
@@ -205,7 +205,7 @@ func init() {
 		return &CategoryFilterTransformer{Allowed: allowed}, nil
 	})
 	RegisterTransformer("prefix-summary", PluginInfo{
-		Name: "Préfixe résumé",
+		Name:        "Préfixe résumé",
 		Description: "Ajoute un préfixe au SUMMARY de l'événement",
 	}, func(options map[string]string) (EventTransformer, error) {
 		return &SummaryPrefixTransformer{Prefix: options["prefix"]}, nil

@@ -92,7 +92,7 @@ func fromStorageState(s *storage.CalendarState) *CalendarState {
 func init() {
 	// Source: type "caldav" (default) handles both public ICS and authenticated CalDAV.
 	RegisterSource("caldav", PluginInfo{
-		Name: "CalDAV / ICS",
+		Name:        "CalDAV / ICS",
 		Description: "Connecteur CalDAV natif — gère les sources publiques (.ics) et authentifiées (Nextcloud, Carbonio) via CTag/sync-token/ETag",
 	}, func(cfg SourceConfig) (SourceConnector, error) {
 		c, err := caldav.NewClient(cfg.URL, cfg.Username, cfg.Password)
@@ -103,7 +103,7 @@ func init() {
 	})
 	// Alias "ics" for explicit public feeds (same implementation)
 	RegisterSource("ics", PluginInfo{
-		Name: "ICS public",
+		Name:        "ICS public",
 		Description: "Flux .ics public (GET + ETag) — alias de CalDAV sans auth",
 	}, func(cfg SourceConfig) (SourceConnector, error) {
 		c, err := caldav.NewClient(cfg.URL, cfg.Username, cfg.Password)
@@ -114,7 +114,7 @@ func init() {
 	})
 
 	RegisterDestination("caldav", PluginInfo{
-		Name: "CalDAV",
+		Name:        "CalDAV",
 		Description: "Connecteur destination CalDAV (Nextcloud, Carbonio) — PUT/DELETE avec gestion ETag",
 	}, func(cfg DestinationConfig) (DestinationConnector, error) {
 		c, err := caldav.NewClient(cfg.URL, cfg.Username, cfg.Password)

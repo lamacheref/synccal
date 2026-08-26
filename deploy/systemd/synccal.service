@@ -1,0 +1,56 @@
+# systemd unit — SyncCal
+# Installation :
+#   sudo cp deploy/systemd/synccal.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now synccal
+
+[Unit]
+Description=SyncCal — Synchroniseur de calendriers CalDAV
+Documentation=https://github.com/lamacheref/synccal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=synccal
+Group=synccal
+# Binaire + configuration (adapter les chemins si besoin)
+ExecStart=/usr/local/bin/synccal -config /etc/synccal/config.yaml
+WorkingDirectory=/var/lib/synccal
+StateDirectory=synccal
+ConfigurationDirectory=synccal
+
+# Redémarrage automatique
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Arrêt propre : SyncCal attend la fin de la sync en cours (max 30s)
+KillSignal=SIGTERM
+TimeoutStopSec=40
+
+# Durcissement
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/synccal
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=synccal
+
+[Install]
+WantedBy=multi-user.target

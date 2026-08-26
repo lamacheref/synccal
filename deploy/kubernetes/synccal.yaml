@@ -1,0 +1,108 @@
+# SyncCal sur Kubernetes
+#
+# kubectl apply -f deploy/kubernetes/
+#
+# Prérequis : image accessible par le cluster (adapter le registry),
+# secret synccal-config contenant config.yaml :
+#   kubectl create secret generic synccal-config --from-file=config.yaml -n synccal
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: synccal
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: synccal-data
+  namespace: synccal
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synccal
+  namespace: synccal
+  labels:
+    app: synccal
+spec:
+  replicas: 1          # SQLite : une seule réplique (pas de mode multi-écrivain)
+  strategy:
+    type: Recreate     # évite 2 pods simultanés sur le même PVC
+  selector:
+    matchLabels:
+      app: synccal
+  template:
+    metadata:
+      labels:
+        app: synccal
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: synccal
+          image: gitea.smiden.eu/flamachere/synccal:latest
+          args: ["-config", "/etc/synccal/config.yaml"]
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: config
+              mountPath: /etc/synccal
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: synccal-data
+        - name: config
+          secret:
+            secretName: synccal-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synccal
+  namespace: synccal
+spec:
+  selector:
+    app: synccal
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http

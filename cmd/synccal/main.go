@@ -26,7 +26,7 @@ func main() {
 
 	logStore := web.NewLogStore(1000)
 	logger := newLogger(&config.Config{}) // bootstrap logger, recreated after config load
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 	log := logger.Sugar()
 
 	cfg, err := config.Load(*configPath)

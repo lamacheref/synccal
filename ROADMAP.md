@@ -54,10 +54,11 @@ Devenir l'outil de référence pour la synchronisation CalDAV unidirectionnelle 
 
 ---
 
-## À venir - Production Ready
-- Documentation déploiement (systemd, docker-compose, k8s)
-- Runbook ops (dépannage, rollback)
-- Support Carbonio dédié (tests d'intégration)
+## ✅ Fait - Production Ready (2026-08-26)
+- Documentation déploiement : `docs/DEPLOYMENT.md` (systemd durci, Compose prod avec healthcheck/rotation logs, k8s Recreate+PVC+probes+annotations Prometheus)
+- Runbook ops : `docs/RUNBOOK.md` (santé, incidents 302/doublons/DB corrompue, sauvegarde/restauration SQLite, rollback binaire/Docker/k8s)
+- CI : seuil couverture ≥90% enforced sur GitHub Actions et Woodpecker
+- Reste au backlog : support Carbonio dédié (tests d'intégration)
 
 ---
 

@@ -3,7 +3,6 @@ package caldav
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,15 +16,15 @@ import (
 
 // mockCalDAV implements a minimal CalDAV server for tests.
 type mockCalDAV struct {
-	server        *httptest.Server
-	ctag          string
-	syncToken     string
-	etag          string
-	icsData       string
-	putStatus     int
-	deleteStatus  int
-	propfindData  string
-	reportData    string
+	server       *httptest.Server
+	ctag         string
+	syncToken    string
+	etag         string
+	icsData      string
+	putStatus    int
+	deleteStatus int
+	propfindData string
+	reportData   string
 }
 
 func newMockCalDAV(t *testing.T, handler http.HandlerFunc) *mockCalDAV {
@@ -195,7 +194,7 @@ func TestHasChanged(t *testing.T) {
 
 	// Same ETag -> not changed (if ETag supported)
 	last := &CalendarState{ETag: cur.ETag}
-	changed, _, err = c2.HasChanged(context.Background(), last)
+	_, _, err = c2.HasChanged(context.Background(), last)
 	require.NoError(t, err)
 	// For public ICS, if ETag same, should be false, but our mock returns same ETag, so not changed
 	// However our HasChanged for public uses ETag, so if same, false
@@ -492,7 +491,7 @@ END:VCALENDAR`)
 		}
 		if strings.Contains(r.URL.Path, "ev1.ics") {
 			w.Header().Set("Content-Type", "text/calendar")
-			io.WriteString(w, `BEGIN:VCALENDAR
+			fmt.Fprint(w, `BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VEVENT
 UID:dup@example.com

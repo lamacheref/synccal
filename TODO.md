@@ -49,15 +49,16 @@
 - [x] **Interface web** : gestion des plugins dans l'UI — Type dropdown (depuis `/api/plugins`), transformers par source/destination (add/delete, type + options JSON), onglet Plugins listant tous les plugins avec description
 - [x] **Tests plugins** : `internal/plugin/plugin_test.go` (7 tests : filter-private, mask-private, prefix, category, pipeline, registry, prefix hash) + `internal/web` plugins endpoint + config avec transformers
 
-## Sprint 6 - Production Ready
-- [ ] Documentation déploiement (systemd, docker-compose, k8s)
-- [ ] Runbook ops (dépannage, rollback)
+## Sprint 6 - Production Ready ✅
+- [x] **Documentation déploiement** : `docs/DEPLOYMENT.md` + artefacts `deploy/` — unit systemd durcie (`deploy/systemd/synccal.service`), docker-compose prod avec healthcheck + rotation logs (`deploy/docker-compose/docker-compose.prod.yml`), manifests k8s namespace/PVC/Deployment Recreate/probes/Prometheus annotations (`deploy/kubernetes/synccal.yaml`)
+- [x] **Runbook ops** : `docs/RUNBOOK.md` — santé, incidents fréquents (302, doublons UID, DB corrompue), sauvegarde sqlite `.backup`, restauration idempotente, rollback binaire/Docker/k8s
+- [x] **CI seuil couverture** : enforcement ≥90% dans `.github/workflows/ci.yml` et `.woodpecker.yml`
 
 ## Backlog (non priorisé)
 - [ ] Notifications (email, webhook, ntfy) sur erreurs
 - [ ] Sync bidirectionnelle optionnelle
 - [ ] Filtres par catégorie / mots-clés (partiellement via transformer `filter-category`)
-- [ ] Support Carbonio dédié (tests d'intégration)
+- [ ] Support Carbonio dédié (tests d'intégration — nécessite image Carbonio conteneurisée)
 - [ ] Tests de charge / benchmark
 
 ## Bugs connus / Dette technique

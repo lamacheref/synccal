@@ -122,63 +122,63 @@ database:
 
 func TestValidate_MissingSource(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{},
+		Sources:      []SourceConfig{},
 		Destinations: []DestinationConfig{{Name: "d1", URL: "https://x", Username: "u", Password: "p", Source: "src1", Type: "caldav"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "at least one source")
 }
 
 func TestValidate_DuplicateSourceName(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", URL: "https://a", Type: "caldav"}, {Name: "src1", URL: "https://b", Type: "caldav"}},
+		Sources:      []SourceConfig{{Name: "src1", URL: "https://a", Type: "caldav"}, {Name: "src1", URL: "https://b", Type: "caldav"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "duplicated")
 }
 
 func TestValidate_MissingSourceURL(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "source[0].url")
 }
 
 func TestValidate_MissingSourceName(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{URL: "https://a", Type: "caldav"}},
+		Sources:      []SourceConfig{{URL: "https://a", Type: "caldav"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: ""}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "source[0].name")
 }
 
 func TestValidate_MissingSourceType(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "source[0].type")
 }
 
 func TestValidate_TransformerTypeRequired(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a", Transformers: []TransformerConfig{{Type: ""}}}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a", Transformers: []TransformerConfig{{Type: ""}}}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "transformers[0].type")
 }
 
 func TestValidate_MissingDestination(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "at least one destination")
 }
@@ -197,52 +197,52 @@ func TestValidate_DuplicateDest(t *testing.T) {
 
 func TestValidate_MissingDestURL(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "destination[0].url")
 }
 
 func TestValidate_MissingDestCreds(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "requires username and password")
 }
 
 func TestValidate_MissingDestSource(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "destination[0].source is required")
 }
 
 func TestValidate_InvalidDestSource(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "unknown"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "does not match any source name")
 }
 
 func TestValidate_DestTransformerType(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1", Transformers: []TransformerConfig{{Type: ""}}}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "transformers[0].type")
 }
 
 func TestValidate_MissingDB(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
 	}
 	assert.ErrorContains(t, Validate(cfg), "database.path")
@@ -250,30 +250,30 @@ func TestValidate_MissingDB(t *testing.T) {
 
 func TestValidate_InvalidInterval(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
-		Sync: SyncConfig{Interval: "notaduration"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
+		Sync:         SyncConfig{Interval: "notaduration"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "sync.interval")
 }
 
 func TestValidate_InvalidTimeout(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
-		Sync: SyncConfig{Timeout: "bad"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
+		Sync:         SyncConfig{Timeout: "bad"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "sync.timeout")
 }
 
 func TestValidate_InvalidDeleteMode(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
-		Sync: SyncConfig{DeleteMode: "invalid"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
+		Sync:         SyncConfig{DeleteMode: "invalid"},
 	}
 	assert.ErrorContains(t, Validate(cfg), "sync.delete_mode")
 }
@@ -287,9 +287,9 @@ func TestIntervalDuration(t *testing.T) {
 
 func TestMigrateLegacy_NoDestinations(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a"}},
 		Destinations: []DestinationConfig{},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	migrateLegacy(cfg)
 	assert.Empty(t, cfg.Destinations)
@@ -297,7 +297,7 @@ func TestMigrateLegacy_NoDestinations(t *testing.T) {
 
 func TestMigrateLegacy_WithDestinationsClearsNested(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a", Destination: DestinationConfig{Name: "d1", URL: "https://x"}}},
+		Sources:      []SourceConfig{{Name: "src1", Type: "caldav", URL: "https://a", Destination: DestinationConfig{Name: "d1", URL: "https://x"}}},
 		Destinations: []DestinationConfig{{Name: "d1", Type: "caldav", URL: "https://x", Username: "u", Password: "p", Source: "src1"}},
 	}
 	migrateLegacy(cfg)
@@ -306,9 +306,9 @@ func TestMigrateLegacy_WithDestinationsClearsNested(t *testing.T) {
 
 func TestSetDefaults_AutoName(t *testing.T) {
 	cfg := &Config{
-		Sources: []SourceConfig{{URL: "https://a"}},
+		Sources:      []SourceConfig{{URL: "https://a"}},
 		Destinations: []DestinationConfig{{URL: "https://x"}},
-		Database: DatabaseConfig{Path: "/tmp/db"},
+		Database:     DatabaseConfig{Path: "/tmp/db"},
 	}
 	setDefaults(cfg)
 	assert.Equal(t, "source-1", cfg.Sources[0].Name)

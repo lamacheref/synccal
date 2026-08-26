@@ -234,7 +234,7 @@ func (c *Client) fetchCalDAVEvents(ctx context.Context, syncToken string) ([]byt
 	var merged []byte
 
 	err := retry.Do(ctx, c.retryConfig, func() error {
-		hrefs := make([]string, 0)
+		var hrefs []string
 
 		if syncToken != "" {
 			// RFC 6578 sync-collection: only fetch the changed resources.

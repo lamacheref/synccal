@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -411,7 +411,7 @@ func TestPluginUploadAndInstalled(t *testing.T) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	fw, _ := w.CreateFormFile("archive", "myplugin.zip")
-	fw.Write([]byte("fake zip content"))
+	_, _ = fw.Write([]byte("fake zip content"))
 	w.Close()
 	req := httptest.NewRequest(http.MethodPost, "/api/plugins/upload", &buf)
 	req.Header.Set("Content-Type", w.FormDataContentType())
@@ -523,7 +523,7 @@ func TestPluginUploadInvalidMultipart(t *testing.T) {
 	// Multipart valide sans champ archive
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	w.WriteField("other", "value")
+	_ = w.WriteField("other", "value")
 	w.Close()
 	req2 := httptest.NewRequest(http.MethodPost, "/api/plugins/upload", &buf)
 	req2.Header.Set("Content-Type", w.FormDataContentType())

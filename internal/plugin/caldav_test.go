@@ -82,7 +82,7 @@ func TestCaldavSourceWrapper(t *testing.T) {
 	assert.Equal(t, "ctag-w", fst.CTag)
 
 	// Fetch avec token
-	data, fst, err = sc.Fetch(ctx, "tok-w")
+	data, _, err = sc.Fetch(ctx, "tok-w")
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "BEGIN:VCALENDAR")
 

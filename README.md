@@ -36,9 +36,9 @@ calendrier public `.ics` ou authentifié (token / mot de passe d'application) �
 | **3** | Interface web (Material Design, light only) | ✅ Terminé | ██████████ 100% |
 | **4** | Multi-sources + destinations séparées (blocs nommés, dropdown) | ✅ Terminé | ██████████ 100% |
 | **5** | Architecture plugin (connecteurs + transformers, upload archive) | ✅ Terminé | ██████████ 100% |
-| **6** | Production ready (doc, runbook) | 📋 Planifié | ░░░░░░░░░░ 0% |
+| **6** | Production ready (doc, runbook, CI seuil) | ✅ Terminé | ██████████ 100% |
 
-> **Progression globale :** `██████████ 83%` — 5/6 sprints terminés
+> **Progression globale :** `██████████ 100%` — 6/6 sprints terminés
 
 ## ✨ Fonctionnalités
 
@@ -234,6 +234,12 @@ go tool cover -html=coverage.out -o coverage.html
     COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
     awk "BEGIN {exit !($COV >= 90)}" || { echo "Coverage $COV% < 90%"; exit 1; }
 ```
+
+## 🚢 Production
+
+* Guide de déploiement : [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — systemd durci, Docker Compose, Kubernetes
+* Runbook exploitation : [docs/RUNBOOK.md](docs/RUNBOOK.md) — diagnostic, incidents, sauvegarde/restauration, rollback
+* Artefacts prêts à l'emploi : [`deploy/`](deploy/) (systemd, docker-compose, kubernetes)
 
 ## 🗺️ Feuille de route
 

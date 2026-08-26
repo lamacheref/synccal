@@ -10,6 +10,14 @@ pipeline:
       - go mod download
       - golangci-lint run ./...
       - go test -v -race -coverprofile=coverage.out ./...
+      - |
+        COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+        echo "Coverage: $COV%"
+        # seuil sur internal (le module complet inclut tests d'intégration skippés)
+        ICOV=$(go test -coverprofile=/tmp/cov-int.out ./internal/... >/dev/null; go tool cover -func=/tmp/cov-int.out | grep total | awk '{print $3}' | tr -d '%')
+        echo "Internal coverage: $ICOV%"
+        apk add --no-cache gawk >/dev/null || true
+        awk "BEGIN {exit !($ICOV >= 90)}" || { echo "Internal coverage $ICOV% < 90%"; exit 1; }
     when:
       event: [push, pull_request]
       branch: main

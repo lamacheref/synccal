@@ -5,12 +5,17 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/smiden/synccal/internal/config"
+	"github.com/smiden/synccal/internal/plugin"
 	"github.com/smiden/synccal/internal/storage"
 	syncpkg "github.com/smiden/synccal/internal/sync"
 	"go.uber.org/zap"
@@ -84,6 +89,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/events", s.auth(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("/api/logs", s.auth(http.HandlerFunc(s.handleLogs)))
 	mux.Handle("/api/sync", s.auth(http.HandlerFunc(s.handleSync)))
+	mux.Handle("/api/plugins", s.auth(http.HandlerFunc(s.handlePlugins)))
+	mux.Handle("/api/plugins/upload", s.auth(http.HandlerFunc(s.handlePluginUpload)))
+	mux.Handle("/api/plugins/installed", s.auth(http.HandlerFunc(s.handleInstalledPlugins)))
 	mux.Handle("/", s.assetHandler())
 	return mux
 }
@@ -176,6 +184,108 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	entries := s.logs.List(level, limit)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"logs": entries})
+}
+
+func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	plugins := plugin.ListAll()
+	writeJSON(w, http.StatusOK, map[string]interface{}{"plugins": plugins})
+}
+
+func (s *Server) handlePluginUpload(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	// 32 MB max
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid multipart form: " + err.Error()})
+		return
+	}
+	file, header, err := r.FormFile("archive")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing 'archive' file field"})
+		return
+	}
+	defer file.Close()
+
+	// Validate extension
+	filename := header.Filename
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext != ".zip" && ext != ".tar" && ext != ".tgz" && ext != ".gz" {
+		// allow any, but warn; for now accept all with check
+		if ext == "" {
+			filename += ".zip"
+		}
+	}
+
+	pluginDir := filepath.Join(filepath.Dir(s.cfg.Database.Path), "plugins")
+	if pluginDir == "." || pluginDir == "" {
+		pluginDir = "data/plugins"
+	}
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cannot create plugin dir: " + err.Error()})
+		return
+	}
+	// Sanitize filename
+	filename = filepath.Base(filename)
+	destPath := filepath.Join(pluginDir, filename)
+	out, err := os.Create(destPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cannot create file: " + err.Error()})
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, file); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "write failed: " + err.Error()})
+		return
+	}
+	s.log.Infow("Plugin uploaded", "filename", filename, "size", header.Size, "path", destPath)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":   "uploaded",
+		"filename": filename,
+		"size":     header.Size,
+		"path":     destPath,
+	})
+}
+
+func (s *Server) handleInstalledPlugins(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	pluginDir := filepath.Join(filepath.Dir(s.cfg.Database.Path), "plugins")
+	if pluginDir == "." || pluginDir == "" {
+		pluginDir = "data/plugins"
+	}
+	entries, err := os.ReadDir(pluginDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"installed": []string{}})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var files []map[string]interface{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, map[string]interface{}{
+			"name": e.Name(),
+			"size": info.Size(),
+			"mod":  info.ModTime().Format("2006-01-02 15:04:05"),
+		})
+	}
+	if files == nil {
+		files = []map[string]interface{}{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"installed": files})
 }
 
 // ---------------------------------------------------------------------------

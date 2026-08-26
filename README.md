@@ -34,22 +34,24 @@ calendrier public `.ics` ou authentifié (token / mot de passe d'application) �
 | **1** | MVP Core — config, CalDAV, storage, sync, scheduler | ✅ Terminé | ██████████ 100% |
 | **2** | Robustesse — retry, CTag/sync-token, tests, graceful shutdown | ✅ Terminé | ██████████ 100% |
 | **3** | Interface web (Material Design, light only) | ✅ Terminé | ██████████ 100% |
-| **4** | Multi-sources (base du projet) | ✅ Terminé | ██████████ 100% |
-| **5** | Architecture plugin (principe du projet) | 📋 Planifié | ░░░░░░░░░░ 0% |
+| **4** | Multi-sources + destinations séparées (blocs nommés, dropdown) | ✅ Terminé | ██████████ 100% |
+| **5** | Architecture plugin (connecteurs + transformers, upload archive) | ✅ Terminé | ██████████ 100% |
 | **6** | Production ready (doc, runbook) | 📋 Planifié | ░░░░░░░░░░ 0% |
 
-> **Progression globale :** `██████████ 67%` — 4/6 sprints terminés
+> **Progression globale :** `██████████ 83%` — 5/6 sprints terminés
 
 ## ✨ Fonctionnalités
 
-- 🔀 **Connexions 1:1** : chaque source est jumelée à sa propre destination (calendrier public `.ics` ou authentifié token/app password), UID préfixés par source
-- 🎯 **Plusieurs connexions** : plusieurs sources et plusieurs destinations, toujours en paires source → destination
+- 🔀 **Sources nommées + destinations séparées** : `sources[]` (`name/type/url`) et `destinations[]` (`name/type/url/source`) découplés, UID préfixés par hash (`sha256(url)[:8]`) via transformer `prefix-uid`
+- 🎯 **Dropdown source** : chaque destination propose une liste déroulante de toutes les sources
+- 🔌 **Architecture plugin** : connecteurs `SourceConnector`/`DestinationConnector` et `EventTransformer` via registry (`internal/plugin`), CalDAV natif en plugin `caldav`/`ics`, 5 transformers (`filter-private`, `mask-private`, `prefix-uid`, `filter-category`, `prefix-summary`) + `Pipeline`
+- 📦 **Installation simple** : upload d'archive (`.zip`, `.tar.gz`) via UI Plugins → `POST /api/plugins/upload`, stockage `data/plugins`, liste `GET /api/plugins/installed`
 - ⚡ **Détection de changements efficace** : CTag / sync-token (RFC 6578), repli ETag / hash
-- 🔒 **Filtrage des événements privés** : exclusion `CLASS:PRIVATE` / `CLASS:CONFIDENTIAL`
+- 🔒 **Filtrage des événements privés** : exclusion `CLASS:PRIVATE`/`CLASS:CONFIDENTIAL` via transformer `filter-private` (auto si `sync.filter_private`)
 - 🛡️ **Robustesse** : retry backoff exponentiel + jitter, respect du header `Retry-After`
-- ⏰ **Sync horaire** : scheduler configurable, lock anti-concurrence
+- ⏰ **Sync horaire** : scheduler configurable, lock anti-concurrence, sync par destination
 - 📊 **Observabilité** : logs JSON structurés, métriques Prometheus, `/healthz` + `/readyz`
-- 🖥️ **Interface web** : dashboard, configuration, événements et logs dans le binaire (assets embarqués, Material Design light)
+- 🖥️ **Interface web** : Material Design light — **blocs titre** contenant des **blocs d'informations** (sections avec header coloré) sur toutes les pages, configuration Sources/Destinations avec Type + Transformers, événements, logs, et **Plugins** (upload + catalogue)
 - 🐳 **Déploiement** : binaire statique Go unique, Docker multi-arch (amd64/arm64)
 
 ## 🚀 Démarrage rapide
@@ -70,25 +72,31 @@ make build
 Copiez `config.example.yaml` vers `config.yaml` et adaptez :
 
 ```yaml
-# Connexions : chaque source est jumelée 1:1 avec sa propre destination
+# Sources : chaque source a un nom unique (référencé par les destinations)
 sources:
-  - url: "https://example.com/calendar.ics"   # source publique (sans auth)
+  - name: "feries-fr"
+    url: "https://example.com/calendar.ics"   # source publique (sans auth)
     # username: "user"                        # ou authentifiée
     # password: "app-password-or-token"
-    destination:
-      name: "nextcloud-personal"
-      url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
-      username: "user"
-      password: "app-password-or-token"
 
-  # - url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
+  # - name: "source-carbonio"
+  #   url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
   #   username: "user"
   #   password: "app-password-or-token"
-  #   destination:
-  #     name: "carbonio-work"
-  #     url: "https://mail.example.com/dav/calendars/user/work/"
-  #     username: "user@domain.com"
-  #     password: "app-password"
+
+# Destinations : chaque destination référence une source via `source` (dropdown dans l'UI)
+destinations:
+  - name: "nextcloud-personal"
+    url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
+    username: "user"
+    password: "app-password-or-token"
+    source: "feries-fr"
+
+  # - name: "carbonio-work"
+  #   url: "https://mail.example.com/dav/calendars/user/work/"
+  #   username: "user@domain.com"
+  #   password: "app-password"
+  #   source: "source-carbonio"
 
 sync:
   interval: "1h"          # 30m, 1h, 2h... ("0" = manuel seulement)
@@ -102,6 +110,7 @@ web:
 ```
 
 > 🔐 **Sécurité** : privilégiez toujours un **token d'application** plutôt qu'un mot de passe de compte (Nextcloud et Carbonio le supportent).
+> **Compatibilité** : l'ancien format `sources[].destination` est automatiquement migré vers `destinations[]` (avec `source: <nom>`).
 
 ### Docker
 
@@ -130,7 +139,7 @@ Tous les endpoints suivants sont protégés par le token (`Authorization: Bearer
 |----------|---------|-------------|
 | `/` | GET | Application web (dashboard, config, événements, logs) |
 | `/api/status` | GET | Statut de la sync (running, connexions, dernière sync) |
-| `/api/config` | GET | Configuration actuelle (mots de passe masqués) |
+| `/api/config` | GET | Configuration actuelle (mots de passe masqués, `sources` + `destinations` séparés) |
 | `/api/config` | PUT | Mise à jour de la configuration (recharge la sync) |
 | `/api/events` | GET | Événements synchronisés (`?dest=<nom>` pour filtrer) |
 | `/api/logs` | GET | Logs structurés capturés (`?level=<niveau>` pour filtrer) |
@@ -159,16 +168,17 @@ make docker-run        # infra de test locale (2× Nextcloud + serveur ICS publi
 ### Architecture
 
 ```
-cmd/synccal/           # point d'entrée
+cmd/synccal/           # point d'entrée (plugin.NewSource/Destination)
 internal/
-  config/              # chargement + validation config YAML
-  caldav/              # client CalDAV (source + destination, CTag/sync-token, retry)
+  config/              # chargement + validation YAML (sources/destinations avec type + transformers)
+  caldav/              # client CalDAV bas-niveau (utilisé par plugin caldav)
+  plugin/              # registry + interfaces (SourceConnector/DestinationConnector/EventTransformer) + transformers (Pipeline) + caldav plugin
   storage/             # SQLite (mapping UID, état source)
-  sync/                # logique de synchronisation + scheduler
+  sync/                # logique de synchronisation via plugins + pipeline (boucle sur destinations)
   retry/               # backoff exponentiel + jitter + Retry-After
   metrics/             # métriques Prometheus
-  web/                 # interface web + API REST (assets embarqués via go:embed)
-tests/integration/     # tests d'intégration Testcontainers
+  web/                 # interface web + API REST (assets embarqués, sections titre, upload plugins)
+tests/integration/     # tests d'intégration Testcontainers (via plugin)
 scripts/               # versioning auto-bumper
 ```
 

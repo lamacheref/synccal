@@ -11,15 +11,16 @@ import (
 
 	"github.com/emersion/go-ical"
 	"github.com/robfig/cron/v3"
-	"github.com/smiden/synccal/internal/caldav"
 	"github.com/smiden/synccal/internal/config"
 	"github.com/smiden/synccal/internal/metrics"
+	"github.com/smiden/synccal/internal/plugin"
 	"github.com/smiden/synccal/internal/storage"
 	"go.uber.org/zap"
 )
 
 // ConnectionStats aggregates the state of one source→destination pairing.
 type ConnectionStats struct {
+	SourceName   string     `json:"source_name"`
 	SourceURL    string     `json:"source_url"`
 	Destination  string     `json:"destination"`
 	Events       int64      `json:"events"`
@@ -43,8 +44,10 @@ type Status struct {
 
 type Syncer struct {
 	cfg          *config.Config
-	sources      []*caldav.Client
-	destinations []*caldav.Client
+	sources      []plugin.SourceConnector
+	destinations []plugin.DestinationConnector
+	pipelines    []*plugin.Pipeline
+	sourceIndex  map[string]int
 	store        *storage.Store
 	log          *zap.SugaredLogger
 	scheduler    *cron.Cron
@@ -58,7 +61,7 @@ type Syncer struct {
 	lastDurSec float64
 }
 
-func New(cfg *config.Config, sources []*caldav.Client, dests []*caldav.Client, store *storage.Store, log *zap.SugaredLogger) *Syncer {
+func New(cfg *config.Config, sources []plugin.SourceConnector, dests []plugin.DestinationConnector, store *storage.Store, log *zap.SugaredLogger) *Syncer {
 	s := &Syncer{
 		cfg:          cfg,
 		sources:      sources,
@@ -66,10 +69,83 @@ func New(cfg *config.Config, sources []*caldav.Client, dests []*caldav.Client, s
 		store:        store,
 		log:          log,
 		connStats:    make(map[string]*ConnectionStats),
+		sourceIndex:  make(map[string]int),
 	}
-	for i := range cfg.Sources {
-		url := cfg.Sources[i].URL
-		s.connStats[url] = &ConnectionStats{SourceURL: url, Destination: cfg.Sources[i].Destination.Name}
+	for i, src := range cfg.Sources {
+		s.sourceIndex[src.Name] = i
+	}
+	for _, d := range cfg.Destinations {
+		srcURL := ""
+		if idx, ok := s.sourceIndex[d.Source]; ok {
+			srcURL = cfg.Sources[idx].URL
+		}
+		s.connStats[d.Name] = &ConnectionStats{SourceName: d.Source, SourceURL: srcURL, Destination: d.Name}
+	}
+	// Build pipelines per destination
+	s.pipelines = make([]*plugin.Pipeline, len(dests))
+	for i, destCfg := range cfg.Destinations {
+		srcIdx, ok := s.sourceIndex[destCfg.Source]
+		if !ok {
+			continue
+		}
+		sourceCfg := cfg.Sources[srcIdx]
+		pipeline := plugin.NewPipeline()
+		// Legacy filter_private -> filter-private transformer if not already present
+		hasFilterPrivate := false
+		for _, tr := range destCfg.Transformers {
+			if tr.Type == "filter-private" || tr.Type == "mask-private" {
+				hasFilterPrivate = true
+				break
+			}
+		}
+		for _, tr := range sourceCfg.Transformers {
+			if tr.Type == "filter-private" || tr.Type == "mask-private" {
+				hasFilterPrivate = true
+				break
+			}
+		}
+		if cfg.Sync.FilterPrivate && !hasFilterPrivate {
+			if t, err := plugin.NewTransformer("filter-private", nil); err == nil {
+				pipeline.Add(t)
+			}
+		}
+		// Prefix UID transformer (always, per source hash) — ensures UID collision avoidance
+		prefix := sourcePrefix(sourceCfg.URL)
+		if t, err := plugin.NewTransformer("prefix-uid", map[string]string{"prefix": prefix}); err == nil {
+			pipeline.Add(t)
+		}
+		// Source transformers
+		for _, tr := range sourceCfg.Transformers {
+			opts := tr.Options
+			if opts == nil {
+				opts = make(map[string]string)
+			}
+			// inject source_url for prefix transformer if needed
+			if tr.Type == "prefix-uid" && opts["prefix"] == "" {
+				opts["prefix"] = prefix
+			}
+			if t, err := plugin.NewTransformer(tr.Type, opts); err == nil {
+				pipeline.Add(t)
+			} else {
+				log.Warnw("Unknown source transformer", "source", sourceCfg.Name, "type", tr.Type, "error", err)
+			}
+		}
+		// Destination transformers
+		for _, tr := range destCfg.Transformers {
+			opts := tr.Options
+			if opts == nil {
+				opts = make(map[string]string)
+			}
+			if tr.Type == "prefix-uid" && opts["prefix"] == "" {
+				opts["prefix"] = prefix
+			}
+			if t, err := plugin.NewTransformer(tr.Type, opts); err == nil {
+				pipeline.Add(t)
+			} else {
+				log.Warnw("Unknown destination transformer", "dest", destCfg.Name, "type", tr.Type, "error", err)
+			}
+		}
+		s.pipelines[i] = pipeline
 	}
 	return s
 }
@@ -96,16 +172,31 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	var totalCreated, totalUpdated, totalDeleted int
 	var firstErr error
 
-	for si, sourceClient := range s.sources {
-		sourceCfg := s.cfg.Sources[si]
-		destClient := s.destinations[si]
-		destCfg := sourceCfg.Destination
+	for di, destClient := range s.destinations {
+		destCfg := s.cfg.Destinations[di]
+		srcIdx, ok := s.sourceIndex[destCfg.Source]
+		if !ok {
+			err := fmt.Errorf("destination %q references unknown source %q", destCfg.Name, destCfg.Source)
+			s.log.Errorw("Invalid destination source reference", "dest", destCfg.Name, "source", destCfg.Source, "error", err)
+			s.recordConnError(destCfg.Name, destCfg.Source, "", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sourceCfg := s.cfg.Sources[srcIdx]
+		sourceClient := s.sources[srcIdx]
 		sourceURL := sourceCfg.URL
+		sourceName := sourceCfg.Name
 		prefix := sourcePrefix(sourceURL)
+		pipeline := s.pipelines[di]
 
 		s.log.Infow("Syncing connection",
-			"source", sourceURL,
+			"source", sourceName,
+			"source_url", sourceURL,
 			"dest", destCfg.Name,
+			"dest_type", destCfg.Type,
+			"source_type", sourceCfg.Type,
 		)
 
 		sourceState, err := s.store.GetSourceState(sourceURL)
@@ -114,34 +205,34 @@ func (s *Syncer) Sync(ctx context.Context) error {
 			sourceState = &storage.CalendarState{}
 		}
 
-		changed, newSourceState, err := sourceClient.HasChanged(ctx, toCalDAVState(sourceState))
+		changed, newSourceState, err := sourceClient.HasChanged(ctx, toPluginState(sourceState))
 		if err != nil {
 			metrics.SourceErrors.WithLabelValues(sourceURL, "check_change").Inc()
-			s.recordConnError(sourceURL, err)
+			s.recordConnError(destCfg.Name, sourceName, sourceURL, err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("check source %s changes: %w", sourceURL, err)
+				firstErr = fmt.Errorf("check source %s changes: %w", sourceName, err)
 			}
 			continue
 		}
 
 		if !changed {
-			s.log.Infow("Source unchanged, skipping", "source", sourceURL)
+			s.log.Infow("Source unchanged, skipping", "source", sourceName, "source_url", sourceURL)
 			continue
 		}
 
 		s.log.Infow("Source changed, fetching events",
-			"source", sourceURL,
+			"source", sourceName,
 			"ctag_changed", sourceState.CTag != newSourceState.CTag,
 			"sync_token_changed", sourceState.SyncToken != newSourceState.SyncToken,
 		)
 
 		syncToken := newSourceState.SyncToken
-		icsData, fetchedState, err := sourceClient.FetchCalendar(ctx, syncToken)
+		icsData, fetchedState, err := sourceClient.Fetch(ctx, syncToken)
 		if err != nil {
 			metrics.SourceErrors.WithLabelValues(sourceURL, "fetch").Inc()
-			s.recordConnError(sourceURL, err)
+			s.recordConnError(destCfg.Name, sourceName, sourceURL, err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("fetch source %s: %w", sourceURL, err)
+				firstErr = fmt.Errorf("fetch source %s: %w", sourceName, err)
 			}
 			continue
 		}
@@ -150,25 +241,25 @@ func (s *Syncer) Sync(ctx context.Context) error {
 			s.log.Warnw("Failed to save source state", "source", sourceURL, "error", err)
 		}
 
-		events, err := parseEvents(icsData, s.cfg.Sync.FilterPrivate, prefix)
+		events, err := parseEventsWithPipeline(ctx, icsData, pipeline)
 		if err != nil {
 			metrics.SourceErrors.WithLabelValues(sourceURL, "parse").Inc()
-			s.recordConnError(sourceURL, err)
+			s.recordConnError(destCfg.Name, sourceName, sourceURL, err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("parse events from %s: %w", sourceURL, err)
+				firstErr = fmt.Errorf("parse events from %s: %w", sourceName, err)
 			}
 			continue
 		}
 
-		s.log.Infow("Fetched source events", "source", sourceURL, "count", len(events), "filter_private", s.cfg.Sync.FilterPrivate)
+		s.log.Infow("Fetched source events", "source", sourceName, "count", len(events), "filter_private", s.cfg.Sync.FilterPrivate)
 
 		connStart := time.Now()
 		created, updated, deleted, err := s.syncDestination(ctx, destClient, destCfg.Name, events, prefix)
 		if err != nil {
-			s.log.Errorw("Connection sync failed", "source", sourceURL, "dest", destCfg.Name, "error", err)
+			s.log.Errorw("Connection sync failed", "source", sourceName, "dest", destCfg.Name, "error", err)
 			metrics.SyncErrors.WithLabelValues(destCfg.Name, "sync").Inc()
 			metrics.SourceErrors.WithLabelValues(sourceURL, "sync").Inc()
-			s.recordConnError(sourceURL, err)
+			s.recordConnError(destCfg.Name, sourceName, sourceURL, err)
 			continue
 		}
 
@@ -185,7 +276,7 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		metrics.SourceEvents.WithLabelValues(sourceURL).Add(float64(len(events)))
 		metrics.SourceSyncDuration.WithLabelValues(sourceURL, "success").Observe(duration)
 		metrics.SourceLastSyncTimestamp.WithLabelValues(sourceURL).Set(float64(time.Now().Unix()))
-		s.recordConnSuccess(sourceURL, len(events), created, updated, deleted, duration)
+		s.recordConnSuccess(destCfg.Name, sourceName, sourceURL, len(events), created, updated, deleted, duration)
 	}
 
 	totalDuration := time.Since(start).Seconds()
@@ -213,7 +304,7 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	return nil
 }
 
-func (s *Syncer) syncDestination(ctx context.Context, dest *caldav.Client, destName string, events map[string][]byte, prefix string) (created, updated, deleted int, err error) {
+func (s *Syncer) syncDestination(ctx context.Context, dest plugin.DestinationConnector, destName string, events map[string][]byte, prefix string) (created, updated, deleted int, err error) {
 	existing, err := s.store.ListMappings(destName, prefix)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("list mappings: %w", err)
@@ -310,27 +401,29 @@ func (s *Syncer) IsRunning() bool {
 	return s.running
 }
 
-func (s *Syncer) recordConnError(url string, err error) {
+func (s *Syncer) recordConnError(destName, sourceName, sourceURL string, err error) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	st := s.connStats[url]
+	st := s.connStats[destName]
 	if st == nil {
-		st = &ConnectionStats{SourceURL: url}
-		s.connStats[url] = st
+		st = &ConnectionStats{SourceName: sourceName, SourceURL: sourceURL, Destination: destName}
+		s.connStats[destName] = st
 	}
 	st.Errors++
 	st.LastError = err.Error()
 }
 
-func (s *Syncer) recordConnSuccess(url string, events, created, updated, deleted int, duration float64) {
+func (s *Syncer) recordConnSuccess(destName, sourceName, sourceURL string, events, created, updated, deleted int, duration float64) {
 	now := time.Now()
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	st := s.connStats[url]
+	st := s.connStats[destName]
 	if st == nil {
-		st = &ConnectionStats{SourceURL: url}
-		s.connStats[url] = st
+		st = &ConnectionStats{SourceName: sourceName, SourceURL: sourceURL, Destination: destName}
+		s.connStats[destName] = st
 	}
+	st.SourceName = sourceName
+	st.SourceURL = sourceURL
 	st.Events += int64(events)
 	st.Created += int64(created)
 	st.Updated += int64(updated)
@@ -381,7 +474,7 @@ func sourcePrefix(rawURL string) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
-func parseEvents(data []byte, filterPrivate bool, prefix string) (map[string][]byte, error) {
+func parseEventsWithPipeline(ctx context.Context, data []byte, pipeline *plugin.Pipeline) (map[string][]byte, error) {
 	cal, err := ical.NewDecoder(strings.NewReader(string(data))).Decode()
 	if err != nil {
 		return nil, err
@@ -392,21 +485,24 @@ func parseEvents(data []byte, filterPrivate bool, prefix string) (map[string][]b
 		if comp.Name != "VEVENT" {
 			continue
 		}
+		// Apply pipeline (filter-private, prefix, etc.)
+		var keep bool
+		var transformed *ical.Component
+		if pipeline != nil {
+			transformed, keep, err = pipeline.Apply(ctx, comp)
+			if err != nil {
+				continue
+			}
+			if !keep || transformed == nil {
+				continue
+			}
+			comp = transformed
+		}
 
 		uid, err := comp.Props.Text("UID")
 		if err != nil || uid == "" {
 			continue
 		}
-
-		if filterPrivate {
-			class, _ := comp.Props.Text("CLASS")
-			if class == "PRIVATE" || class == "CONFIDENTIAL" {
-				continue
-			}
-		}
-
-		prefixedUID := prefix + "-" + uid
-		comp.Props.SetText("UID", prefixedUID)
 
 		eventCal := ical.NewCalendar()
 		eventCal.Props.SetText(ical.PropProductID, "-//SyncCal//EN")
@@ -416,7 +512,7 @@ func parseEvents(data []byte, filterPrivate bool, prefix string) (map[string][]b
 		if err := ical.NewEncoder(&buf).Encode(eventCal); err != nil {
 			continue
 		}
-		events[prefixedUID] = []byte(buf.String())
+		events[uid] = []byte(buf.String())
 	}
 	return events, nil
 }
@@ -426,14 +522,14 @@ func hashContent(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-func toCalDAVState(s *storage.CalendarState) *caldav.CalendarState {
+func toPluginState(s *storage.CalendarState) *plugin.CalendarState {
 	if s == nil {
-		return &caldav.CalendarState{}
+		return &plugin.CalendarState{}
 	}
-	return &caldav.CalendarState{CTag: s.CTag, SyncToken: s.SyncToken, ETag: s.ETag}
+	return &plugin.CalendarState{CTag: s.CTag, SyncToken: s.SyncToken, ETag: s.ETag}
 }
 
-func toStorageState(s *caldav.CalendarState) *storage.CalendarState {
+func toStorageState(s *plugin.CalendarState) *storage.CalendarState {
 	if s == nil {
 		return &storage.CalendarState{}
 	}

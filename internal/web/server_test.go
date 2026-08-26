@@ -51,8 +51,10 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeSyncer, *storage.S
 
 	cfg := &config.Config{
 		Sources: []config.SourceConfig{{
-			URL:         "https://example.com/calendar.ics",
-			Destination: config.DestinationConfig{Name: "dest1", URL: "https://dest.example.com/", Username: "user", Password: "secret"},
+			Name: "src1", Type: "caldav", URL: "https://example.com/calendar.ics",
+		}},
+		Destinations: []config.DestinationConfig{{
+			Name: "dest1", Type: "caldav", URL: "https://dest.example.com/", Username: "user", Password: "secret", Source: "src1",
 		}},
 		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "test.db")},
 		Sync: config.SyncConfig{
@@ -166,12 +168,16 @@ func TestConfigGetSanitized(t *testing.T) {
 	sources := body["sources"].([]interface{})
 	require.Len(t, sources, 1)
 	source := sources[0].(map[string]interface{})
+	assert.Equal(t, "src1", source["name"])
 	assert.Equal(t, "https://example.com/calendar.ics", source["url"])
 	_, hasPassword := source["password"]
 	assert.False(t, hasPassword, "password key must be absent")
 
-	dest := source["destination"].(map[string]interface{})
+	dests := body["destinations"].([]interface{})
+	require.Len(t, dests, 1)
+	dest := dests[0].(map[string]interface{})
 	assert.Equal(t, "dest1", dest["name"])
+	assert.Equal(t, "src1", dest["source"])
 	_, hasDestPassword := dest["password"]
 	assert.False(t, hasDestPassword, "destination password key must be absent")
 
@@ -185,16 +191,12 @@ func TestConfigPutUpdatesAndRebuilds(t *testing.T) {
 
 	payload := `{
 		"sources": [
-			{
-				"url": "https://newsource.example.com/cal.ics",
-				"username": "srcuser",
-				"password": "newsecret",
-				"destination": {"name": "dest1", "url": "https://dest.example.com/", "username": "user"}
-			},
-			{
-				"url": "https://newsource2.example.com/cal.ics",
-				"destination": {"name": "dest2", "url": "https://dest2.example.com/", "username": "user", "password": "tok2"}
-			}
+			{"name": "src1", "url": "https://newsource.example.com/cal.ics", "username": "srcuser", "password": "newsecret"},
+			{"name": "src2", "url": "https://newsource2.example.com/cal.ics"}
+		],
+		"destinations": [
+			{"name": "dest1", "url": "https://dest.example.com/", "username": "user", "source": "src1"},
+			{"name": "dest2", "url": "https://dest2.example.com/", "username": "user", "password": "tok2", "source": "src2"}
 		],
 		"sync": {"interval": "30m", "timeout": "3m", "batch_size": 50, "delete_mode": "hard", "filter_private": false},
 		"web": {"addr": ":9090"},
@@ -208,12 +210,14 @@ func TestConfigPutUpdatesAndRebuilds(t *testing.T) {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	require.Len(t, s.cfg.Sources, 2)
+	require.Len(t, s.cfg.Destinations, 2)
 	assert.Equal(t, "https://newsource.example.com/cal.ics", s.cfg.Sources[0].URL)
 	assert.Equal(t, "newsecret", s.cfg.Sources[0].Password, "explicit source password must be applied")
 	assert.Equal(t, "https://newsource2.example.com/cal.ics", s.cfg.Sources[1].URL)
-	assert.Equal(t, "dest1", s.cfg.Sources[0].Destination.Name)
-	assert.Equal(t, "secret", s.cfg.Sources[0].Destination.Password, "omitted dest password keeps previous value")
-	assert.Equal(t, "tok2", s.cfg.Sources[1].Destination.Password, "password set on new dest applied")
+	assert.Equal(t, "dest1", s.cfg.Destinations[0].Name)
+	assert.Equal(t, "src1", s.cfg.Destinations[0].Source)
+	assert.Equal(t, "secret", s.cfg.Destinations[0].Password, "omitted dest password keeps previous value")
+	assert.Equal(t, "tok2", s.cfg.Destinations[1].Password, "password set on new dest applied")
 	assert.Equal(t, "30m", s.cfg.Sync.Interval)
 	assert.Equal(t, false, s.cfg.Sync.FilterPrivate)
 	assert.Equal(t, "debug", s.cfg.Logging.Level)
@@ -231,8 +235,8 @@ func TestConfigPutValidationFails(t *testing.T) {
 	s, _, _ := newTestServer(t, "")
 	handler := s.Handler()
 
-	// A source with an invalid destination (missing name) is rejected.
-	payload := `{"sources": [{"url": "https://example.com/cal.ics", "destination": {}}]}`
+	// A destination with missing name is rejected.
+	payload := `{"sources": [{"name": "src1", "url": "https://example.com/cal.ics"}], "destinations": [{"url": "https://dest.example.com/", "source": "src1", "username": "u"}]}`
 	rec := doRequest(t, handler, http.MethodPut, "/api/config", payload, "")
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
@@ -339,4 +343,57 @@ func TestIndexPagePublicWithoutTokenLeak(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "Authentification requise")
 	assert.NotContains(t, rec.Body.String(), "tok123", "access token must never be embedded in the page")
 	assert.NotContains(t, rec.Body.String(), "__SYNCCAL_TOKEN__")
+}
+
+func TestPluginsEndpoint(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	handler := s.Handler()
+
+	rec := doRequest(t, handler, http.MethodGet, "/api/plugins", "", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	plugins, ok := body["plugins"].([]interface{})
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, len(plugins), 5, "should have at least caldav source/dest + transformers")
+	// Check that transformer types are present
+	found := false
+	for _, p := range plugins {
+		m := p.(map[string]interface{})
+		if m["type"] == "filter-private" && m["kind"] == "transformer" {
+			found = true
+		}
+	}
+	assert.True(t, found, "filter-private transformer should be registered")
+}
+
+func TestConfigWithPlugins(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	handler := s.Handler()
+
+	// Config with plugin types and transformers
+	payload := `{
+		"sources": [{"name": "src1", "type": "caldav", "url": "https://example.com/cal.ics", "transformers": [{"type": "filter-category", "options": {"categories": "work"}}]}],
+		"destinations": [{"name": "dest1", "type": "caldav", "url": "https://dest.example.com/", "username": "user", "password": "secret", "source": "src1", "transformers": [{"type": "prefix-summary", "options": {"prefix": "[Sync] "}}]}],
+		"sync": {"interval": "1h"}
+	}`
+	rec := doRequest(t, handler, http.MethodPut, "/api/config", payload, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	srcs := body["sources"].([]interface{})
+	assert.Len(t, srcs, 1)
+	src := srcs[0].(map[string]interface{})
+	assert.Equal(t, "caldav", src["type"])
+	trs, ok := src["transformers"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, trs, 1)
+
+	dests := body["destinations"].([]interface{})
+	dest := dests[0].(map[string]interface{})
+	assert.Equal(t, "caldav", dest["type"])
+	trs = dest["transformers"].([]interface{})
+	assert.Len(t, trs, 1)
 }

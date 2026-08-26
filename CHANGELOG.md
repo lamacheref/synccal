@@ -8,7 +8,28 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Non publié]
 
 ### Ajouté
-- Interface web Material Design (planifiée, non implémentée)
+- **Sprint 5 - Architecture Plugin** : interfaces `SourceConnector`/`DestinationConnector`/`EventTransformer`, registry `internal/plugin` (Register/New/ListAll), CalDAV natif en plugin `caldav`/`ics`, 5 transformers (`filter-private`, `mask-private`, `prefix-uid` auto, `filter-category`, `prefix-summary`) + `Pipeline`
+- Config par plugin : `type` + `transformers: [{type, options}]` par source/destination, defaults `caldav`, validation, migration legacy
+- API `GET /api/plugins` (auth requise) listant tous les plugins avec `type/kind/name/description`
+- UI : Type dropdown (depuis `/api/plugins`), transformers par source/destination (add/delete, type + options JSON), onglet Plugins dédié
+- Tests : `internal/plugin/plugin_test.go` (7 tests), `internal/web` plugins endpoint, config avec transformers, intégration via `plugin.NewSource/Destination`
+
+### Modifié
+- `sync.Syncer` utilise `plugin.SourceConnector/DestinationConnector` + `Pipeline` par destination (auto `filter-private` + `prefix-uid`), plus de dépendance directe à `caldav.Client`
+- `cmd/synccal/main.go` crée les connecteurs via `plugin.NewSource/Destination` depuis `config.Type`
+- `internal/web/config_dto.go` : vues `type` + `transformers`, merge avec defaults `caldav`
+- `internal/web/assets/app.js` : refonte config (Type + Transformers), fetchPlugins, renderTransformers, collectConfig avec transformers, onglet Plugins, `views` étendu
+- `config.example.yaml` documente `type` et `transformers` avec exemples
+
+### Corrigé
+- `internal/web/server_test.go` : `TestConfigPutUpdatesAndRebuilds` type manquant → default `caldav` dans merge, nouvelle config initiale avec `Type`
+- `tests/integration/synccal_test.go` : migration vers `plugin.NewSource/Destination` + `sync.New` avec interfaces plugin
+
+### Précédent (2026-08-26) - Sprint 4 + UI séparée
+- Config découplée `sources[]` (name/url) + `destinations[]` (name/url/source) avec blocs séparés et dropdown source
+- Validation `destination.source` + migration legacy, sync boucle sur `destinations`
+- UI : blocs Sources/Destinations séparés, Type dropdown, login fix (`btn-login`/`btn-logout`/`Enter`)
+- Tests adaptés, Nextcloud installé pour sync initiale réussie (3 events)
 
 ---
 
@@ -42,7 +63,7 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Ajouté
 - MVP Core :
-  - Config YAML + validation (source, destinations, sync, logging)
+  - Config YAML + validation (sources, destinations, sync, logging)
   - Client CalDAV source : publique (GET .ics + ETag) et authentifiée (REPORT calendar-query)
   - Client CalDAV destination : création, mise à jour, suppression (PUT/DELETE)
   - Mapping UID source → destination en SQLite (hash de contenu)

@@ -293,6 +293,63 @@ tr:hover td { background: #fafafa; }
   margin-bottom: 12px;
 }
 
+/* Section — bloc titre contenant des blocs d'informations */
+.section {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+.section-header {
+  background: var(--primary);
+  color: #fff;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.section-header h2 {
+  color: #fff;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.section-header .hint {
+  color: rgba(255,255,255,.85);
+  font-size: 12px;
+}
+.section-header .btn {
+  background: rgba(255,255,255,.15);
+  color: #fff;
+  border-color: rgba(255,255,255,.3);
+}
+.section-header .btn:hover {
+  background: rgba(255,255,255,.25);
+}
+.section-body {
+  padding: 16px;
+}
+.section-body .card:last-child {
+  margin-bottom: 0;
+}
+.upload-area {
+  border: 2px dashed var(--divider);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+  background: #fafafa;
+  margin-bottom: 16px;
+}
+.upload-area.dragover {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
 /* Confirmation modal */
 .confirm-card {
   width: 100%;

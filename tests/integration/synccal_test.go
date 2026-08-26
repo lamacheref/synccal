@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/smiden/synccal/internal/caldav"
+	"github.com/smiden/synccal/internal/plugin"
 	"github.com/smiden/synccal/internal/config"
 	"github.com/smiden/synccal/internal/storage"
 	"github.com/smiden/synccal/internal/sync"
@@ -73,17 +74,10 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 
 	cfg := &config.Config{
 		Sources: []config.SourceConfig{
-			{
-				URL:      srcURL,
-				Username: "admin",
-				Password: "admin",
-				Destination: config.DestinationConfig{
-					Name:     "nextcloud-dest",
-					URL:      destURL,
-					Username: "admin",
-					Password: "admin",
-				},
-			},
+			{Name: "src1", URL: srcURL, Username: "admin", Password: "admin"},
+		},
+		Destinations: []config.DestinationConfig{
+			{Name: "nextcloud-dest", URL: destURL, Username: "admin", Password: "admin", Source: "src1"},
 		},
 		Database: config.DatabaseConfig{Path: dbPath},
 		Sync: config.SyncConfig{
@@ -97,13 +91,17 @@ func TestSyncCal_NextcloudToNextcloud(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "debug", Format: "console"},
 	}
 
+	sourceConn, err := plugin.NewSource(plugin.SourceConfig{Name: cfg.Sources[0].Name, Type: "caldav", URL: cfg.Sources[0].URL, Username: cfg.Sources[0].Username, Password: cfg.Sources[0].Password})
+	require.NoError(t, err)
+	destConn, err := plugin.NewDestination(plugin.DestinationConfig{Name: cfg.Destinations[0].Name, Type: "caldav", URL: cfg.Destinations[0].URL, Username: cfg.Destinations[0].Username, Password: cfg.Destinations[0].Password, Source: cfg.Destinations[0].Source})
+	require.NoError(t, err)
 	sourceClient, err := caldav.NewClient(cfg.Sources[0].URL, cfg.Sources[0].Username, cfg.Sources[0].Password)
 	require.NoError(t, err)
-
-	destClient, err := caldav.NewClient(cfg.Sources[0].Destination.URL, cfg.Sources[0].Destination.Username, cfg.Sources[0].Destination.Password)
+	destClient, err := caldav.NewClient(cfg.Destinations[0].URL, cfg.Destinations[0].Username, cfg.Destinations[0].Password)
 	require.NoError(t, err)
+	_ = destClient
 
-	syncer := sync.New(cfg, []*caldav.Client{sourceClient}, []*caldav.Client{destClient}, store, log)
+	syncer := sync.New(cfg, []plugin.SourceConnector{sourceConn}, []plugin.DestinationConnector{destConn}, store, log)
 
 	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
@@ -249,15 +247,10 @@ END:VCALENDAR`
 
 	cfg := &config.Config{
 		Sources: []config.SourceConfig{
-			{
-				URL: icsURL,
-				Destination: config.DestinationConfig{
-					Name:     "nextcloud-dest",
-					URL:      destURL,
-					Username: "admin",
-					Password: "admin",
-				},
-			},
+			{Name: "public-ics", URL: icsURL},
+		},
+		Destinations: []config.DestinationConfig{
+			{Name: "nextcloud-dest", URL: destURL, Username: "admin", Password: "admin", Source: "public-ics"},
 		},
 		Database: config.DatabaseConfig{Path: dbPath},
 		Sync: config.SyncConfig{
@@ -271,13 +264,15 @@ END:VCALENDAR`
 		Logging: config.LoggingConfig{Level: "debug", Format: "console"},
 	}
 
-	sourceClient, err := caldav.NewClient(cfg.Sources[0].URL, cfg.Sources[0].Username, cfg.Sources[0].Password)
+	sourceConn, err := plugin.NewSource(plugin.SourceConfig{Name: cfg.Sources[0].Name, Type: "caldav", URL: cfg.Sources[0].URL, Username: cfg.Sources[0].Username, Password: cfg.Sources[0].Password})
 	require.NoError(t, err)
-
-	destClient, err := caldav.NewClient(cfg.Sources[0].Destination.URL, cfg.Sources[0].Destination.Username, cfg.Sources[0].Destination.Password)
+	destConn, err := plugin.NewDestination(plugin.DestinationConfig{Name: cfg.Destinations[0].Name, Type: "caldav", URL: cfg.Destinations[0].URL, Username: cfg.Destinations[0].Username, Password: cfg.Destinations[0].Password, Source: cfg.Destinations[0].Source})
 	require.NoError(t, err)
+	destClient, err := caldav.NewClient(cfg.Destinations[0].URL, cfg.Destinations[0].Username, cfg.Destinations[0].Password)
+	require.NoError(t, err)
+	_ = destClient
 
-	syncer := sync.New(cfg, []*caldav.Client{sourceClient}, []*caldav.Client{destClient}, store, log)
+	syncer := sync.New(cfg, []plugin.SourceConnector{sourceConn}, []plugin.DestinationConnector{destConn}, store, log)
 
 	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
@@ -363,18 +358,12 @@ END:VCALENDAR`
 
 	cfg := &config.Config{
 		Sources: []config.SourceConfig{
-			{
-				URL: icsURL,
-				Destination: config.DestinationConfig{
-					Name: "nextcloud-dest", URL: destURL, Username: "admin", Password: "admin",
-				},
-			},
-			{
-				URL: srcURL, Username: "admin", Password: "admin",
-				Destination: config.DestinationConfig{
-					Name: "nextcloud-dest", URL: destURL, Username: "admin", Password: "admin",
-				},
-			},
+			{Name: "public-ics", URL: icsURL},
+			{Name: "src-auth", URL: srcURL, Username: "admin", Password: "admin"},
+		},
+		Destinations: []config.DestinationConfig{
+			{Name: "dest-public", URL: destURL, Username: "admin", Password: "admin", Source: "public-ics"},
+			{Name: "dest-auth", URL: destURL, Username: "admin", Password: "admin", Source: "src-auth"},
 		},
 		Database: config.DatabaseConfig{Path: dbPath},
 		Sync: config.SyncConfig{
@@ -388,14 +377,20 @@ END:VCALENDAR`
 		Logging: config.LoggingConfig{Level: "debug", Format: "console"},
 	}
 
-	publicClient, err := caldav.NewClient(cfg.Sources[0].URL, cfg.Sources[0].Username, cfg.Sources[0].Password)
+	publicConn, err := plugin.NewSource(plugin.SourceConfig{Name: cfg.Sources[0].Name, Type: "caldav", URL: cfg.Sources[0].URL})
+	require.NoError(t, err)
+	authConn, err := plugin.NewSource(plugin.SourceConfig{Name: cfg.Sources[1].Name, Type: "caldav", URL: cfg.Sources[1].URL, Username: cfg.Sources[1].Username, Password: cfg.Sources[1].Password})
+	require.NoError(t, err)
+	destPublicConn, err := plugin.NewDestination(plugin.DestinationConfig{Name: cfg.Destinations[0].Name, Type: "caldav", URL: cfg.Destinations[0].URL, Username: cfg.Destinations[0].Username, Password: cfg.Destinations[0].Password, Source: cfg.Destinations[0].Source})
+	require.NoError(t, err)
+	destAuthConn, err := plugin.NewDestination(plugin.DestinationConfig{Name: cfg.Destinations[1].Name, Type: "caldav", URL: cfg.Destinations[1].URL, Username: cfg.Destinations[1].Username, Password: cfg.Destinations[1].Password, Source: cfg.Destinations[1].Source})
 	require.NoError(t, err)
 	authClient, err := caldav.NewClient(cfg.Sources[1].URL, cfg.Sources[1].Username, cfg.Sources[1].Password)
 	require.NoError(t, err)
-	destClient, err := caldav.NewClient(cfg.Sources[0].Destination.URL, cfg.Sources[0].Destination.Username, cfg.Sources[0].Destination.Password)
+	destClient, err := caldav.NewClient(cfg.Destinations[0].URL, cfg.Destinations[0].Username, cfg.Destinations[0].Password)
 	require.NoError(t, err)
 
-	syncer := sync.New(cfg, []*caldav.Client{publicClient, authClient}, []*caldav.Client{destClient, destClient}, store, log)
+	syncer := sync.New(cfg, []plugin.SourceConnector{publicConn, authConn}, []plugin.DestinationConnector{destPublicConn, destAuthConn}, store, log)
 
 	syncCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
@@ -432,9 +427,14 @@ END:VCALENDAR`))
 
 	// 4 distinct events must land in the destination (public-only, auth-only
 	// and the shared UID twice, disambiguated by the per-source prefix).
-	mappings, err := store.ListMappings("nextcloud-dest", "")
+	// With separated model, we have two destination names pointing to same URL.
+	mappingsPub, err := store.ListMappings("dest-public", "")
 	require.NoError(t, err)
-	require.Equal(t, 4, len(mappings), "both sources should be synced, shared UID disambiguated")
+	mappingsAuth, err := store.ListMappings("dest-auth", "")
+	require.NoError(t, err)
+	require.Equal(t, 2, len(mappingsPub), "public source should have 2 events")
+	require.Equal(t, 2, len(mappingsAuth), "auth source should have 2 events")
+	require.Equal(t, 4, len(mappingsPub)+len(mappingsAuth), "both sources should be synced, shared UID disambiguated")
 
 	destRefs, err := destClient.ListEvents(syncCtx)
 	require.NoError(t, err)
@@ -443,9 +443,11 @@ END:VCALENDAR`))
 	// A second run must be idempotent: no duplicates, no cross-source deletions.
 	err = syncer.Sync(syncCtx)
 	require.NoError(t, err)
-	mappings, err = store.ListMappings("nextcloud-dest", "")
+	mappingsPub, err = store.ListMappings("dest-public", "")
 	require.NoError(t, err)
-	require.Equal(t, 4, len(mappings), "second sync must not create duplicates or delete foreign-source events")
+	mappingsAuth, err = store.ListMappings("dest-auth", "")
+	require.NoError(t, err)
+	require.Equal(t, 4, len(mappingsPub)+len(mappingsAuth), "second sync must not create duplicates or delete foreign-source events")
 	destRefs, err = destClient.ListEvents(syncCtx)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(destRefs), "second sync must not alter destination contents")

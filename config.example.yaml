@@ -1,27 +1,59 @@
 # SyncCal Configuration Example
 # Copy to config.yaml and adjust
 
-# Connections: each source is paired 1:1 with its own destination calendar
+# Sources: each source has a unique name (referenced by destinations)
+# Plugin types: "caldav" (default, public .ics ou CalDAV auth) ou "ics" (alias public)
 sources:
-  # Source: public calendar (.ics URL, no auth)
-  - url: "https://example.com/calendar.ics"
+  - name: "feries-fr"
+    type: "caldav"
+    url: "https://example.com/calendar.ics"
     # username: ""  # Optional - if provided, uses CalDAV auth
     # password: ""  # Optional - token or app password
-    destination:
-      name: "nextcloud-personal"
-      url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
-      username: "user"
-      password: "app-password-or-token"
+    # transformers: [] # optional, ex:
+    #   - type: "filter-category"
+    #     options:
+    #       categories: "work, perso"
 
-  # Another connection: authenticated source → its own destination
-  # - url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
+  # Authenticated source example:
+  # - name: "source-carbonio"
+  #   type: "caldav"
+  #   url: "https://cloud.example.com/remote.php/dav/calendars/user/source/"
   #   username: "user"
   #   password: "app-password-or-token"
-  #   destination:
-  #     name: "carbonio-work"
-  #     url: "https://mail.example.com/dav/calendars/user/work/"
-  #     username: "user@domain.com"
-  #     password: "app-password"
+  #   transformers:
+  #     - type: "prefix-summary"
+  #       options:
+  #         prefix: "[Carbonio] "
+
+# Destinations: each destination is paired to a source via `source` (name)
+# Plugin types: "caldav" (Nextcloud, Carbonio)
+destinations:
+  - name: "nextcloud-personal"
+    type: "caldav"
+    url: "https://cloud.example.com/remote.php/dav/calendars/user/personal/"
+    username: "user"
+    password: "app-password-or-token"
+    source: "feries-fr"
+    # transformers: pipeline appliqué après fetch, avant PUT
+    # Le préfixe UID (hash source) et le filtre PRIVATE sont automatiques,
+    # mais peuvent être surchargés :
+    # transformers:
+    #   - type: "mask-private"
+    #     options:
+    #       summary: "Busy"
+    #   - type: "filter-category"
+    #     options:
+    #       categories: "work"
+    #   - type: "prefix-summary"
+    #     options:
+    #       prefix: "[Sync] "
+
+  # - name: "carbonio-work"
+  #   type: "caldav"
+  #   url: "https://mail.example.com/dav/calendars/user/work/"
+  #   username: "user@domain.com"
+  #   password: "app-password"
+  #   source: "source-carbonio"
 
 # Database for UID mapping and state
 database:
@@ -34,7 +66,7 @@ sync:
   timeout: "5m"            # Max duration per sync run
   batch_size: 100          # Events per batch
   delete_mode: "soft"      # "soft" (mark deleted) | "hard" (purge)
-  filter_private: true     # Exclude CLASS:PRIVATE/CONFIDENTIAL events
+  filter_private: true     # legacy : exclut les événements PRIVATE/CONFIDENTIAL (transformer filter-private automatique)
 
 # Metrics & health
 metrics:

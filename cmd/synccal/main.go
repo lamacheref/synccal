@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/smiden/synccal/internal/caldav"
 	"github.com/smiden/synccal/internal/config"
 	"github.com/smiden/synccal/internal/metrics"
+	"github.com/smiden/synccal/internal/plugin"
 	"github.com/smiden/synccal/internal/storage"
 	"github.com/smiden/synccal/internal/sync"
 	"github.com/smiden/synccal/internal/web"
@@ -40,7 +40,8 @@ func main() {
 	log = logger.Sugar()
 
 	log.Infow("Starting SyncCal",
-		"connections", len(cfg.Sources),
+		"sources", len(cfg.Sources),
+		"destinations", len(cfg.Destinations),
 		"interval", cfg.Sync.Interval,
 	)
 
@@ -51,22 +52,44 @@ func main() {
 	defer store.Close()
 
 	newSyncer := func(c *config.Config) (*sync.Syncer, error) {
-		sourceClients := make([]*caldav.Client, len(c.Sources))
-		destClients := make([]*caldav.Client, len(c.Sources))
+		sourceConnectors := make([]plugin.SourceConnector, len(c.Sources))
 		for i, s := range c.Sources {
-			sc, err := caldav.NewClient(s.URL, s.Username, s.Password)
-			if err != nil {
-				return nil, fmt.Errorf("source client %q: %w", s.URL, err)
+			pcfg := plugin.SourceConfig{
+				Name:     s.Name,
+				Type:     s.Type,
+				URL:      s.URL,
+				Username: s.Username,
+				Password: s.Password,
 			}
-			sourceClients[i] = sc
-
-			dc, err := caldav.NewClient(s.Destination.URL, s.Destination.Username, s.Destination.Password)
-			if err != nil {
-				return nil, fmt.Errorf("destination client %q: %w", s.Destination.Name, err)
+			if pcfg.Type == "" {
+				pcfg.Type = "caldav"
 			}
-			destClients[i] = dc
+			sc, err := plugin.NewSource(pcfg)
+			if err != nil {
+				return nil, fmt.Errorf("source %q (%s): %w", s.Name, s.URL, err)
+			}
+			sourceConnectors[i] = sc
 		}
-		return sync.New(c, sourceClients, destClients, store, log), nil
+		destConnectors := make([]plugin.DestinationConnector, len(c.Destinations))
+		for i, d := range c.Destinations {
+			pcfg := plugin.DestinationConfig{
+				Name:     d.Name,
+				Type:     d.Type,
+				URL:      d.URL,
+				Username: d.Username,
+				Password: d.Password,
+				Source:   d.Source,
+			}
+			if pcfg.Type == "" {
+				pcfg.Type = "caldav"
+			}
+			dc, err := plugin.NewDestination(pcfg)
+			if err != nil {
+				return nil, fmt.Errorf("destination %q: %w", d.Name, err)
+			}
+			destConnectors[i] = dc
+		}
+		return sync.New(c, sourceConnectors, destConnectors, store, log), nil
 	}
 
 	syncer, err := newSyncer(cfg)

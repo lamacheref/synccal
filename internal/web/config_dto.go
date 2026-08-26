@@ -9,23 +9,34 @@ import (
 
 // Sanitized view returned by GET /api/config — passwords never leave the server.
 type configView struct {
-	Sources  []sourceView `json:"sources"`
-	Database databaseView `json:"database"`
-	Sync     syncView     `json:"sync"`
-	Web      webView      `json:"web"`
-	Logging  loggingView  `json:"logging"`
+	Sources      []sourceView      `json:"sources"`
+	Destinations []destinationView `json:"destinations"`
+	Database     databaseView      `json:"database"`
+	Sync         syncView          `json:"sync"`
+	Web          webView           `json:"web"`
+	Logging      loggingView       `json:"logging"`
+}
+
+type transformerView struct {
+	Type    string            `json:"type"`
+	Options map[string]string `json:"options,omitempty"`
 }
 
 type sourceView struct {
-	URL         string          `json:"url"`
-	Username    string          `json:"username"`
-	Destination destinationView `json:"destination"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type"`
+	URL          string            `json:"url"`
+	Username     string            `json:"username"`
+	Transformers []transformerView `json:"transformers,omitempty"`
 }
 
 type destinationView struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Username string `json:"username"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type"`
+	URL          string            `json:"url"`
+	Username     string            `json:"username"`
+	Source       string            `json:"source"`
+	Transformers []transformerView `json:"transformers,omitempty"`
 }
 
 type databaseView struct {
@@ -53,24 +64,35 @@ type loggingView struct {
 // Update payload accepted by PUT /api/config. A nil/omitted password means
 // "keep the current one" — passwords are write-only.
 type configUpdate struct {
-	Sources *[]sourceUpdate `json:"sources"`
-	Sync    *syncUpdate     `json:"sync"`
-	Web     *webUpdate      `json:"web"`
-	Logging *loggingUpdate  `json:"logging"`
+	Sources      *[]sourceUpdate      `json:"sources"`
+	Destinations *[]destinationUpdate `json:"destinations"`
+	Sync         *syncUpdate          `json:"sync"`
+	Web          *webUpdate           `json:"web"`
+	Logging      *loggingUpdate       `json:"logging"`
+}
+
+type transformerUpdate struct {
+	Type    string            `json:"type"`
+	Options map[string]string `json:"options"`
 }
 
 type sourceUpdate struct {
-	URL         string             `json:"url"`
-	Username    string             `json:"username"`
-	Password    *string            `json:"password"`
-	Destination *destinationUpdate `json:"destination"`
+	Name         string               `json:"name"`
+	Type         string               `json:"type"`
+	URL          string               `json:"url"`
+	Username     string               `json:"username"`
+	Password     *string              `json:"password"`
+	Transformers []transformerUpdate `json:"transformers"`
 }
 
 type destinationUpdate struct {
-	Name     string  `json:"name"`
-	URL      string  `json:"url"`
-	Username string  `json:"username"`
-	Password *string `json:"password"`
+	Name         string               `json:"name"`
+	Type         string               `json:"type"`
+	URL          string               `json:"url"`
+	Username     string               `json:"username"`
+	Password     *string              `json:"password"`
+	Source       string               `json:"source"`
+	Transformers []transformerUpdate `json:"transformers"`
 }
 
 type syncUpdate struct {
@@ -108,12 +130,30 @@ func (s *Server) configView() configView {
 		Web:     webView{Addr: cfg.Web.Addr, TokenSet: cfg.Web.Token != ""},
 		Logging: loggingView{Level: cfg.Logging.Level, Format: cfg.Logging.Format},
 	}
-	for _, s := range cfg.Sources {
-		cv.Sources = append(cv.Sources, sourceView{
-			URL:         s.URL,
-			Username:    s.Username,
-			Destination: destinationView{Name: s.Destination.Name, URL: s.Destination.URL, Username: s.Destination.Username},
-		})
+	for _, src := range cfg.Sources {
+		sv := sourceView{
+			Name:     src.Name,
+			Type:     src.Type,
+			URL:      src.URL,
+			Username: src.Username,
+		}
+		for _, tr := range src.Transformers {
+			sv.Transformers = append(sv.Transformers, transformerView{Type: tr.Type, Options: tr.Options})
+		}
+		cv.Sources = append(cv.Sources, sv)
+	}
+	for _, d := range cfg.Destinations {
+		dv := destinationView{
+			Name:     d.Name,
+			Type:     d.Type,
+			URL:      d.URL,
+			Username: d.Username,
+			Source:   d.Source,
+		}
+		for _, tr := range d.Transformers {
+			dv.Transformers = append(dv.Transformers, transformerView{Type: tr.Type, Options: tr.Options})
+		}
+		cv.Destinations = append(cv.Destinations, dv)
 	}
 	return cv
 }
@@ -123,27 +163,49 @@ func mergeConfigUpdate(cfg *config.Config, upd *configUpdate) {
 	if upd.Sources != nil {
 		srcs := make([]config.SourceConfig, 0, len(*upd.Sources))
 		for i, s := range *upd.Sources {
-			ns := config.SourceConfig{URL: s.URL, Username: s.Username}
+			ns := config.SourceConfig{Name: s.Name, URL: s.URL, Username: s.Username}
+			if s.Type != "" {
+				ns.Type = s.Type
+			} else if i < len(cfg.Sources) && cfg.Sources[i].Type != "" {
+				ns.Type = cfg.Sources[i].Type
+			} else {
+				ns.Type = "caldav"
+			}
 			if s.Password != nil && *s.Password != "" {
 				ns.Password = *s.Password
 			} else if i < len(cfg.Sources) {
 				ns.Password = cfg.Sources[i].Password
 			}
-
-			if s.Destination != nil {
-				nd := config.DestinationConfig{Name: s.Destination.Name, URL: s.Destination.URL, Username: s.Destination.Username}
-				if s.Destination.Password != nil && *s.Destination.Password != "" {
-					nd.Password = *s.Destination.Password
-				} else if i < len(cfg.Sources) {
-					nd.Password = cfg.Sources[i].Destination.Password
-				}
-				ns.Destination = nd
-			} else if i < len(cfg.Sources) {
-				ns.Destination = cfg.Sources[i].Destination
+			for _, tr := range s.Transformers {
+				ns.Transformers = append(ns.Transformers, config.TransformerConfig{Type: tr.Type, Options: tr.Options})
 			}
 			srcs = append(srcs, ns)
 		}
 		cfg.Sources = srcs
+	}
+
+	if upd.Destinations != nil {
+		dests := make([]config.DestinationConfig, 0, len(*upd.Destinations))
+		for i, d := range *upd.Destinations {
+			nd := config.DestinationConfig{Name: d.Name, URL: d.URL, Username: d.Username, Source: d.Source}
+			if d.Type != "" {
+				nd.Type = d.Type
+			} else if i < len(cfg.Destinations) && cfg.Destinations[i].Type != "" {
+				nd.Type = cfg.Destinations[i].Type
+			} else {
+				nd.Type = "caldav"
+			}
+			if d.Password != nil && *d.Password != "" {
+				nd.Password = *d.Password
+			} else if i < len(cfg.Destinations) {
+				nd.Password = cfg.Destinations[i].Password
+			}
+			for _, tr := range d.Transformers {
+				nd.Transformers = append(nd.Transformers, config.TransformerConfig{Type: tr.Type, Options: tr.Options})
+			}
+			dests = append(dests, nd)
+		}
+		cfg.Destinations = dests
 	}
 
 	if upd.Sync != nil {

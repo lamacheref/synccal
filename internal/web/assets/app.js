@@ -45,6 +45,12 @@ function doLogout() {
   requireLogin("Déconnecté. Entrez à nouveau le token pour continuer.");
 }
 
+$("#btn-login").addEventListener("click", doLogin);
+$("#login-token").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+$("#btn-logout").addEventListener("click", doLogout);
+
 // Confirmation modal
 let confirmResolve = null;
 
@@ -96,7 +102,7 @@ function esc(s) {
 // Tabs
 // ---------------------------------------------------------------------------
 
-const views = { dashboard: "#view-dashboard", config: "#view-config", events: "#view-events", logs: "#view-logs" };
+const views = { dashboard: "#view-dashboard", config: "#view-config", events: "#view-events", logs: "#view-logs", plugins: "#view-plugins" };
 
 function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
@@ -109,6 +115,7 @@ function loadView(name) {
   else if (name === "config") loadConfigForm();
   else if (name === "events") loadEvents();
   else if (name === "logs") loadLogs();
+  else if (name === "plugins") loadPlugins();
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
@@ -191,15 +198,19 @@ async function loadDashboard() {
   }
 
   $("#view-dashboard").innerHTML = `
-    <div class="grid cols-3">
+    <div class="section">
+      <div class="section-header"><h2>État global</h2></div>
+      <div class="section-body"><div class="grid cols-3">
       <div class="card stat"><div class="value ${state}">${stateLabel}</div><div class="label">État de la synchronisation</div></div>
       <div class="card stat"><div class="value">${esc(st.interval || "manuel")}</div><div class="label">Intervalle</div></div>
       <div class="card stat"><div class="value">${esc(lastSync)}</div><div class="label">Dernière synchronisation</div></div>
       <div class="card stat"><div class="value">${esc(dur)}</div><div class="label">Dernière durée</div></div>
       ${st.last_error ? `<div class="card stat"><div class="value err">${esc(st.last_error)}</div><div class="label">Dernière erreur</div></div>` : ""}
+    </div></div>
     </div>
-    <div class="card">
-      <h2>Connexions</h2>
+    <div class="section">
+      <div class="section-header"><h2>Connexions</h2><span class="hint">Sources → Destinations</span></div>
+      <div class="section-body"><div class="card" style="margin:0;box-shadow:none;">
       <div class="table-wrap">
         <table>
           <thead>
@@ -207,7 +218,8 @@ async function loadDashboard() {
           </thead>
           <tbody>${connRows}</tbody>
         </table>
-      </div>
+      </div></div>
+    </div></div>
     </div>`;
 }
 
@@ -216,33 +228,122 @@ async function loadDashboard() {
 // ---------------------------------------------------------------------------
 
 let configCache = null;
+let pluginCache = null;
+
+async function fetchPlugins() {
+  if (pluginCache) return pluginCache;
+  try {
+    const data = await api("/api/plugins");
+    pluginCache = data.plugins || [];
+    return pluginCache;
+  } catch (e) {
+    return [];
+  }
+}
+
+function pluginOptions(kind, selected) {
+  if (!pluginCache) return `<option value="${esc(selected)}" selected>${esc(selected)}</option>`;
+  const list = pluginCache.filter((p) => p.kind === kind);
+  if (!list.length) return `<option value="${esc(selected)}" selected>${esc(selected || "caldav")}</option>`;
+  return list.map((p) => `<option value="${esc(p.type)}" ${p.type === selected ? "selected" : ""}>${esc(p.type)} — ${esc(p.name)}</option>`).join("");
+}
+
+function transformerTypeOptions(selected) {
+  if (!pluginCache) return `<option value="${esc(selected)}" selected>${esc(selected)}</option>`;
+  const list = pluginCache.filter((p) => p.kind === "transformer");
+  if (!list.length) return `<option value="${esc(selected)}" selected>${esc(selected)}</option>`;
+  return list.map((p) => `<option value="${esc(p.type)}" ${p.type === selected ? "selected" : ""}>${esc(p.type)} — ${esc(p.name)}</option>`).join("");
+}
+
+function renderTransformers(transformers, kind, idx) {
+  if (!transformers || !transformers.length) return `<div class="empty">Aucun transformer — le pipeline par défaut (préfixe UID + filtre PRIVATE automatique) sera appliqué</div>`;
+  return transformers.map((tr, ti) => `
+    <div class="card" data-transformer-idx="${ti}" style="margin:8px 0;padding:12px;">
+      <div class="card-header" style="margin-bottom:8px;">
+        <span class="hint">Transformer ${ti+1}: ${esc(tr.type)}</span>
+        <button type="button" class="btn btn-outline btn-small" data-action="delete-transformer" data-kind="${kind}" data-idx="${idx}" data-tidx="${ti}">🗑</button>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>Type</label><select data-field="tr-type" data-kind="${kind}" data-idx="${idx}" data-tidx="${ti}">${transformerTypeOptions(tr.type)}</select></div>
+        <div class="field"><label>Options (JSON)</label><input data-field="tr-options" data-kind="${kind}" data-idx="${idx}" data-tidx="${ti}" value="${esc(JSON.stringify(tr.options || {}))}" placeholder='{} ou {"prefix":"[Sync] "}'></div>
+      </div>
+      <div class="hint" style="margin-top:4px;font-size:12px;color:var(--text-secondary)">${esc((pluginCache||[]).find(p=>p.type===tr.type)?.description || "")}</div>
+    </div>
+  `).join("");
+}
+
+
+function sourceOptions(selected) {
+  const srcs = configCache ? configCache.sources || [] : [];
+  if (!srcs.length) return `<option value="" disabled selected>Aucune source — ajoutez d'abord une source</option>`;
+  return srcs.map((s) => `<option value="${esc(s.name)}" ${s.name === selected ? "selected" : ""}>${esc(s.name)} (${esc(s.url)})</option>`).join("");
+}
+
+function refreshDestinationSourceOptions() {
+  // Rebuild all destination source dropdowns when a source name changes
+  $$("#destinations .card select[data-field='source']").forEach((sel) => {
+    const cur = sel.value;
+    // rebuild from current source names in DOM (not yet saved)
+    const names = $$("#sources .card input[data-field='name']").map((i) => i.value.trim()).filter(Boolean);
+    const urls = $$("#sources .card input[data-field='url']").map((i) => i.value.trim());
+    sel.innerHTML = names.length ? names.map((n, idx) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)} (${esc(urls[idx] || "")})</option>`).join("") : `<option value="" disabled selected>Aucune source</option>`;
+    if (names.length && !names.includes(cur)) sel.value = names[0];
+  });
+}
 
 async function loadConfigForm() {
   let cfg;
   try {
     cfg = await api("/api/config");
     configCache = cfg;
+    await fetchPlugins();
   } catch (e) {
     $("#view-config").innerHTML = `<div class="card"><div class="empty">Impossible de charger la configuration : ${esc(e.message)}</div></div>`;
     return;
   }
 
-  const srcFields = cfg.sources
+  const srcFields = (cfg.sources || [])
     .map(
       (s, i) => `
-      <div class="card" data-source-index="${i}">
+      <div class="card" data-kind="source">
         <div class="card-header">
-          <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
-          <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-source" title="Supprimer cette connexion">🗑</button>
+          <h2>Source ${i + 1}<span class="hint"> — ${esc(s.name || "")} (${esc(s.type || "caldav")})</span></h2>
+          <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-source" title="Supprimer cette source">🗑</button>
         </div>
         <div class="form-grid">
-          <div class="field"><label>URL source</label><input data-source="${i}" data-field="url" value="${esc(s.url)}"></div>
-          <div class="field"><label>Utilisateur source</label><input data-source="${i}" data-field="username" value="${esc(s.username)}" autocomplete="off"></div>
-          <div class="field"><label>Mot de passe / token source <span class="hint">(laisser vide pour conserver)</span></label><input data-source="${i}" data-field="password" type="password" autocomplete="new-password"></div>
-          <div class="field"><label>Nom destination</label><input data-source="${i}" data-field="dest_name" value="${esc(s.destination && s.destination.name || "")}"></div>
-          <div class="field"><label>URL destination</label><input data-source="${i}" data-field="dest_url" value="${esc(s.destination && s.destination.url || "")}"></div>
-          <div class="field"><label>Utilisateur destination</label><input data-source="${i}" data-field="dest_username" value="${esc(s.destination && s.destination.username || "")}" autocomplete="off"></div>
-          <div class="field"><label>Mot de passe destination <span class="hint">(laisser vide pour conserver)</span></label><input data-source="${i}" data-field="dest_password" type="password" autocomplete="new-password"></div>
+          <div class="field"><label>Nom <span class="hint">unique</span></label><input data-field="name" value="${esc(s.name)}" placeholder="ex: feries-fr"></div>
+          <div class="field"><label>Type <span class="hint">plugin source</span></label><select data-field="type">${pluginOptions("source", s.type || "caldav")}</select></div>
+          <div class="field"><label>URL source</label><input data-field="url" value="${esc(s.url)}" placeholder="https://example.com/calendar.ics"></div>
+          <div class="field"><label>Utilisateur source <span class="hint">vide si public</span></label><input data-field="username" value="${esc(s.username)}" autocomplete="off"></div>
+          <div class="field"><label>Mot de passe / token source <span class="hint">(laisser vide pour conserver)</span></label><input data-field="password" type="password" autocomplete="new-password"></div>
+        </div>
+        <div style="margin-top:12px;">
+          <div class="card-header"><h3 style="font-size:14px;">Transformers source</h3><button type="button" class="btn btn-outline btn-small" data-action="add-transformer" data-kind="source" data-idx="${i}">+ Transformer</button></div>
+          <div data-transformers="source" data-idx="${i}">${renderTransformers(s.transformers, "source", i)}</div>
+        </div>
+      </div>`
+    )
+    .join("");
+
+  const destFields = (cfg.destinations || [])
+    .map(
+      (d, i) => `
+      <div class="card" data-kind="destination">
+        <div class="card-header">
+          <h2>Destination ${i + 1}<span class="hint"> — ${esc(d.name || "")} (${esc(d.type || "caldav")})</span></h2>
+          <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-destination" title="Supprimer cette destination">🗑</button>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label>Nom <span class="hint">unique</span></label><input data-field="name" value="${esc(d.name)}" placeholder="ex: nextcloud-perso"></div>
+          <div class="field"><label>Type <span class="hint">plugin destination</span></label><select data-field="type">${pluginOptions("destination", d.type || "caldav")}</select></div>
+          <div class="field"><label>Source <span class="hint">liste déroulante des sources</span></label><select data-field="source">${sourceOptions(d.source)}</select></div>
+          <div class="field"><label>URL destination</label><input data-field="url" value="${esc(d.url)}" placeholder="https://cloud.example.com/remote.php/dav/..."></div>
+          <div class="field"><label>Utilisateur destination</label><input data-field="username" value="${esc(d.username)}" autocomplete="off"></div>
+          <div class="field"><label>Mot de passe destination <span class="hint">(laisser vide pour conserver)</span></label><input data-field="password" type="password" autocomplete="new-password"></div>
+        </div>
+        <div style="margin-top:12px;">
+          <div class="card-header"><h3 style="font-size:14px;">Transformers destination</h3><button type="button" class="btn btn-outline btn-small" data-action="add-transformer" data-kind="destination" data-idx="${i}">+ Transformer</button></div>
+          <div data-transformers="destination" data-idx="${i}">${renderTransformers(d.transformers, "destination", i)}</div>
         </div>
       </div>`
     )
@@ -250,118 +351,272 @@ async function loadConfigForm() {
 
   $("#view-config").innerHTML = `
     <form id="config-form">
-      <div id="sources">${srcFields}</div>
-
-      <div class="card">
-        <h2>Synchronisation</h2>
-        <div class="form-grid">
-          <div class="field"><label>Intervalle</label><input id="cfg-sync-interval" value="${esc(cfg.sync.interval)}" placeholder="1h, 30m, 0 (manuel)"></div>
-          <div class="field"><label>Timeout</label><input id="cfg-sync-timeout" value="${esc(cfg.sync.timeout)}"></div>
-          <div class="field"><label>Batch size</label><input id="cfg-sync-batch" type="number" value="${cfg.sync.batch_size}"></div>
-          <div class="field"><label>Mode de suppression</label>
-            <select id="cfg-sync-delete">
-              <option value="soft" ${cfg.sync.delete_mode === "soft" ? "selected" : ""}>Soft (marquer supprimé)</option>
-              <option value="hard" ${cfg.sync.delete_mode === "hard" ? "selected" : ""}>Hard (purge)</option>
-            </select>
-          </div>
-          <div class="field check"><input id="cfg-sync-private" type="checkbox" ${cfg.sync.filter_private ? "checked" : ""}><label for="cfg-sync-private">Filtrer les événements PRIVATE / CONFIDENTIAL</label></div>
+      <div class="section">
+        <div class="section-header"><h2>Sources</h2><span class="hint">Calendriers sources — chaque source a un nom unique</span></div>
+        <div class="section-body">
+          <div id="sources">${srcFields || `<div class="card"><div class="empty">Aucune source — ajoutez-en une</div></div>`}</div>
+          <div style="margin-top:12px; text-align:right;"><button type="button" class="btn btn-outline" id="btn-add-source">+ Ajouter une source</button></div>
         </div>
       </div>
 
-      <div class="card">
-        <h2>Interface web</h2>
-        <div class="form-grid">
-          <div class="field"><label>Adresse d'écoute</label><input id="cfg-web-addr" value="${esc(cfg.web.addr)}"></div>
-          <div class="field"><label>Token d'accès <span class="hint">(${cfg.web.token_set ? "défini" : "non défini — accès libre"})</span></label><input id="cfg-web-token" type="password" placeholder="${cfg.web.token_set ? "•••••••• (laisser vide pour conserver)" : ""}"></div>
+      <div class="section">
+        <div class="section-header"><h2>Destinations</h2><span class="hint">Chaque destination est jumelée à une source via la liste déroulante</span></div>
+        <div class="section-body">
+          <div id="destinations">${destFields || `<div class="card"><div class="empty">Aucune destination — ajoutez-en une</div></div>`}</div>
+          <div style="margin-top:12px; text-align:right;"><button type="button" class="btn btn-outline" id="btn-add-destination">+ Ajouter une destination</button></div>
         </div>
       </div>
 
-      <div class="card">
-        <h2>Journalisation</h2>
-        <div class="form-grid">
-          <div class="field"><label>Niveau</label>
-            <select id="cfg-log-level">
-              ${["debug", "info", "warn", "error"].map((l) => `<option value="${l}" ${cfg.logging.level === l ? "selected" : ""}>${l}</option>`).join("")}
-            </select>
+      <div class="section">
+        <div class="section-header"><h2>Configuration</h2><span class="hint">Paramètres globaux — synchronisation, interface et journalisation</span></div>
+        <div class="section-body">
+          <div class="toolbar" style="justify-content:flex-end; margin-bottom:16px;">
+            <button type="submit" class="btn btn-primary">Enregistrer la configuration</button>
           </div>
-          <div class="field"><label>Format</label>
-            <select id="cfg-log-format">
-              ${["json", "console"].map((f) => `<option value="${f}" ${cfg.logging.format === f ? "selected" : ""}>${f}</option>`).join("")}
-            </select>
+
+          <div class="card">
+            <h2>Synchronisation</h2>
+            <div class="form-grid">
+              <div class="field"><label>Intervalle</label><input id="cfg-sync-interval" value="${esc(cfg.sync.interval)}" placeholder="1h, 30m, 0 (manuel)"></div>
+              <div class="field"><label>Timeout</label><input id="cfg-sync-timeout" value="${esc(cfg.sync.timeout)}"></div>
+              <div class="field"><label>Batch size</label><input id="cfg-sync-batch" type="number" value="${cfg.sync.batch_size}"></div>
+              <div class="field"><label>Mode de suppression</label>
+                <select id="cfg-sync-delete">
+                  <option value="soft" ${cfg.sync.delete_mode === "soft" ? "selected" : ""}>Soft (marquer supprimé)</option>
+                  <option value="hard" ${cfg.sync.delete_mode === "hard" ? "selected" : ""}>Hard (purge)</option>
+                </select>
+              </div>
+              <div class="field check"><input id="cfg-sync-private" type="checkbox" ${cfg.sync.filter_private ? "checked" : ""}><label for="cfg-sync-private">Filtrer les événements PRIVATE / CONFIDENTIAL</label></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Interface web</h2>
+            <div class="form-grid">
+              <div class="field"><label>Adresse d'écoute</label><input id="cfg-web-addr" value="${esc(cfg.web.addr)}"></div>
+              <div class="field"><label>Token d'accès <span class="hint">(${cfg.web.token_set ? "défini" : "non défini — accès libre"})</span></label><input id="cfg-web-token" type="password" placeholder="${cfg.web.token_set ? "•••••••• (laisser vide pour conserver)" : ""}"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Journalisation</h2>
+            <div class="form-grid">
+              <div class="field"><label>Niveau</label>
+                <select id="cfg-log-level">
+                  ${["debug", "info", "warn", "error"].map((l) => `<option value="${l}" ${cfg.logging.level === l ? "selected" : ""}>${l}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field"><label>Format</label>
+                <select id="cfg-log-format">
+                  ${["json", "console"].map((f) => `<option value="${f}" ${cfg.logging.format === f ? "selected" : ""}>${f}</option>`).join("")}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="toolbar" style="justify-content:flex-end; margin-top:16px;">
+            <button type="submit" class="btn btn-primary">Enregistrer la configuration</button>
           </div>
         </div>
-      </div>
-
-      <div class="toolbar">
-        <button type="submit" class="btn btn-primary">Enregistrer la configuration</button>
-        <button type="button" class="btn btn-outline" id="btn-add-source">+ Ajouter une connexion</button>
       </div>
     </form>`;
 
   $("#btn-add-source").addEventListener("click", () => addSourceCard());
+  $("#btn-add-destination").addEventListener("click", () => addDestinationCard());
   $("#config-form").addEventListener("submit", saveConfig);
 
-  // Event delegation for delete connection buttons (on document for robustness)
+  // Refresh destination dropdowns when source names change
+  $$("#sources input[data-field='name'], #sources input[data-field='url']").forEach((el) => {
+    el.addEventListener("input", () => {
+      // update cached names for dropdown preview
+      const names = $$("#sources .card input[data-field='name']").map((i) => i.value.trim());
+      const urls = $$("#sources .card input[data-field='url']").map((i) => i.value.trim());
+      configCache.sources = names.map((n, idx) => ({ name: n, url: urls[idx] || "" }));
+      refreshDestinationSourceOptions();
+    });
+  });
+
+  // Delegated handlers for transformers and deletes
   document.addEventListener("click", (e) => {
-    const btn = e.target.closest('[data-action="delete-source"]');
-    if (btn) {
-      const card = btn.closest(".card");
-      if (card) openConfirm("Supprimer cette connexion ?", () => card.remove());
+    const btnAddTr = e.target.closest('[data-action="add-transformer"]');
+    if (btnAddTr) {
+      const kind = btnAddTr.dataset.kind;
+      const idx = btnAddTr.dataset.idx;
+      const wrap = document.querySelector(`[data-transformers="${kind}"][data-idx="${idx}"]`);
+      if (wrap) {
+        if (wrap.querySelector(".empty")) wrap.innerHTML = "";
+        const trIdx = wrap.querySelectorAll("[data-field='tr-type']").length;
+        const opts = transformerTypeOptions(pluginCache ? pluginCache.filter(p=>p.kind==="transformer")[0]?.type || "filter-private" : "filter-private");
+        const div = document.createElement("div");
+        div.className = "card";
+        div.style.margin = "8px 0";
+        div.style.padding = "12px";
+        div.innerHTML = `
+          <div class="card-header" style="margin-bottom:8px;">
+            <span class="hint">Transformer ${trIdx+1}</span>
+            <button type="button" class="btn btn-outline btn-small" data-action="delete-transformer" data-kind="${kind}" data-idx="${idx}" data-tidx="${trIdx}">🗑</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>Type</label><select data-field="tr-type" data-kind="${kind}" data-idx="${idx}" data-tidx="${trIdx}">${opts}</select></div>
+            <div class="field"><label>Options (JSON)</label><input data-field="tr-options" data-kind="${kind}" data-idx="${idx}" data-tidx="${trIdx}" placeholder='{}'></div>
+          </div>`;
+        wrap.appendChild(div);
+      }
+      return;
+    }
+    const btnDelTr = e.target.closest('[data-action="delete-transformer"]');
+    if (btnDelTr) {
+      const card = btnDelTr.closest(".card");
+      if (card) card.remove();
+      return;
+    }
+    const btnSrc = e.target.closest('[data-action="delete-source"]');
+    if (btnSrc) {
+      const card = btnSrc.closest(".card");
+      if (card) openConfirm("Supprimer cette source ? Les destinations liées deviendront invalides.", () => { card.remove(); refreshDestinationSourceOptions(); });
+      return;
+    }
+    const btnDst = e.target.closest('[data-action="delete-destination"]');
+    if (btnDst) {
+      const card = btnDst.closest(".card");
+      if (card) openConfirm("Supprimer cette destination ?", () => card.remove());
     }
   });
 }
 
 function addSourceCard() {
   const wrap = $("#sources");
-  const i = wrap.querySelectorAll(".card").length;
+  const empty = wrap.querySelector(".empty");
+  if (empty) wrap.innerHTML = "";
   const card = document.createElement("div");
   card.className = "card";
-  card.dataset.sourceIndex = i;
+  card.dataset.kind = "source";
+  const typeOpts = pluginCache ? pluginCache.filter(p=>p.kind==="source").map(p=>`<option value="${esc(p.type)}">${esc(p.type)} — ${esc(p.name)}</option>`).join("") : `<option value="caldav" selected>caldav</option>`;
   card.innerHTML = `
     <div class="card-header">
-      <h2>Connexion ${i + 1} <span class="hint">(1 source → 1 destination)</span></h2>
-      <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-source" title="Supprimer cette connexion">🗑</button>
+      <h2>Nouvelle source</h2>
+      <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-source" title="Supprimer cette source">🗑</button>
     </div>
     <div class="form-grid">
-      <div class="field"><label>URL source</label><input data-source="${i}" data-field="url" value=""></div>
-      <div class="field"><label>Utilisateur source</label><input data-source="${i}" data-field="username" value="" autocomplete="off"></div>
-      <div class="field"><label>Mot de passe / token source</label><input data-source="${i}" data-field="password" type="password" autocomplete="new-password"></div>
-      <div class="field"><label>Nom destination</label><input data-source="${i}" data-field="dest_name" value=""></div>
-      <div class="field"><label>URL destination</label><input data-source="${i}" data-field="dest_url" value=""></div>
-      <div class="field"><label>Utilisateur destination</label><input data-source="${i}" data-field="dest_username" value="" autocomplete="off"></div>
-      <div class="field"><label>Mot de passe destination</label><input data-source="${i}" data-field="dest_password" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>Nom</label><input data-field="name" value="" placeholder="ex: feries-fr"></div>
+      <div class="field"><label>Type</label><select data-field="type">${typeOpts}</select></div>
+      <div class="field"><label>URL source</label><input data-field="url" value="" placeholder="https://example.com/calendar.ics"></div>
+      <div class="field"><label>Utilisateur source</label><input data-field="username" value="" autocomplete="off"></div>
+      <div class="field"><label>Mot de passe / token source</label><input data-field="password" type="password" autocomplete="new-password"></div>
+    </div>
+    <div style="margin-top:12px;">
+      <div class="card-header"><h3 style="font-size:14px;">Transformers source</h3><button type="button" class="btn btn-outline btn-small" data-action="add-transformer" data-kind="source" data-idx="${wrap.querySelectorAll(".card").length}">+ Transformer</button></div>
+      <div data-transformers="source" data-idx="${wrap.querySelectorAll(".card").length}"><div class="empty">Aucun transformer</div></div>
+    </div>`;
+  wrap.appendChild(card);
+  // wire name change to refresh dropdowns
+  card.querySelectorAll("input[data-field='name'], input[data-field='url']").forEach((el) => {
+    el.addEventListener("input", () => {
+      const names = $$("#sources .card input[data-field='name']").map((i) => i.value.trim());
+      const urls = $$("#sources .card input[data-field='url']").map((i) => i.value.trim());
+      configCache.sources = names.map((n, idx) => ({ name: n, url: urls[idx] || "" }));
+      refreshDestinationSourceOptions();
+    });
+  });
+  refreshDestinationSourceOptions();
+}
+
+function addDestinationCard() {
+  const wrap = $("#destinations");
+  const empty = wrap.querySelector(".empty");
+  if (empty) wrap.innerHTML = "";
+  const card = document.createElement("div");
+  card.className = "card";
+  card.dataset.kind = "destination";
+  const opts = sourceOptions("");
+  const typeOpts = pluginCache ? pluginCache.filter(p=>p.kind==="destination").map(p=>`<option value="${esc(p.type)}">${esc(p.type)} — ${esc(p.name)}</option>`).join("") : `<option value="caldav" selected>caldav</option>`;
+  card.innerHTML = `
+    <div class="card-header">
+      <h2>Nouvelle destination</h2>
+      <button type="button" class="btn btn-outline btn-small btn-delete" data-action="delete-destination" title="Supprimer cette destination">🗑</button>
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>Nom</label><input data-field="name" value="" placeholder="ex: nextcloud-perso"></div>
+      <div class="field"><label>Type</label><select data-field="type">${typeOpts}</select></div>
+      <div class="field"><label>Source</label><select data-field="source">${opts}</select></div>
+      <div class="field"><label>URL destination</label><input data-field="url" value="" placeholder="https://cloud.example.com/remote.php/dav/..."></div>
+      <div class="field"><label>Utilisateur destination</label><input data-field="username" value="" autocomplete="off"></div>
+      <div class="field"><label>Mot de passe destination</label><input data-field="password" type="password" autocomplete="new-password"></div>
+    </div>
+    <div style="margin-top:12px;">
+      <div class="card-header"><h3 style="font-size:14px;">Transformers destination</h3><button type="button" class="btn btn-outline btn-small" data-action="add-transformer" data-kind="destination" data-idx="${wrap.querySelectorAll(".card").length}">+ Transformer</button></div>
+      <div data-transformers="destination" data-idx="${wrap.querySelectorAll(".card").length}"><div class="empty">Aucun transformer</div></div>
     </div>`;
   wrap.appendChild(card);
 }
 
 function collectConfig() {
   const cfg = JSON.parse(JSON.stringify(configCache || {}));
-  cfg.sources = $$("#sources .card").map((card) => {
-    const s = { url: "", username: "", destination: {} };
+  cfg.sources = $$("#sources .card[data-kind='source']").map((card) => {
+    const s = { name: "", type: "caldav", url: "", username: "" };
     card.querySelectorAll("[data-field]").forEach((input) => {
       const key = input.dataset.field;
-      switch (key) {
-        case "password":
-          if (input.value) s.password = input.value;
-          break;
-        case "dest_name":
-          if (input.value) s.destination.name = input.value;
-          break;
-        case "dest_url":
-          if (input.value) s.destination.url = input.value;
-          break;
-        case "dest_username":
-          if (input.value) s.destination.username = input.value;
-          break;
-        case "dest_password":
-          if (input.value) s.destination.password = input.value;
-          break;
-        default:
-          s[key] = input.value;
+      if (key === "password") {
+        if (input.value) s.password = input.value;
+      } else if (key.startsWith("tr-")) {
+        // skip transformer fields, handled separately
+      } else {
+        s[key] = input.value.trim();
       }
     });
+    // collect transformers for this source
+    const trWrap = card.querySelector('[data-transformers="source"]');
+    if (trWrap) {
+      s.transformers = Array.from(trWrap.querySelectorAll("[data-field='tr-type']")).map((sel, idx) => {
+        const type = sel.value;
+        const optsInput = trWrap.querySelector(`[data-field='tr-options'][data-tidx="${idx}"]`);
+        let opts = {};
+        if (optsInput && optsInput.value.trim()) {
+          try { opts = JSON.parse(optsInput.value); } catch(e) {
+            // try key=value parsing
+            optsInput.value.split(",").forEach(pair => {
+              const [k,v] = pair.split("=").map(s=>s.trim());
+              if (k) opts[k]=v||"";
+            });
+          }
+        }
+        return { type, options: opts };
+      }).filter(tr => tr.type);
+    }
     return s;
-  });
+  }).filter((s) => s.name || s.url);
+
+  cfg.destinations = $$("#destinations .card[data-kind='destination']").map((card) => {
+    const d = { name: "", type: "caldav", url: "", username: "", source: "" };
+    card.querySelectorAll("[data-field]").forEach((input) => {
+      const key = input.dataset.field;
+      if (key === "password") {
+        if (input.value) d.password = input.value;
+      } else if (key.startsWith("tr-")) {
+        // skip
+      } else {
+        d[key] = input.value.trim();
+      }
+    });
+    const trWrap = card.querySelector('[data-transformers="destination"]');
+    if (trWrap) {
+      d.transformers = Array.from(trWrap.querySelectorAll("[data-field='tr-type']")).map((sel, idx) => {
+        const type = sel.value;
+        const optsInput = trWrap.querySelector(`[data-field='tr-options'][data-tidx="${idx}"]`);
+        let opts = {};
+        if (optsInput && optsInput.value.trim()) {
+          try { opts = JSON.parse(optsInput.value); } catch(e) {
+            optsInput.value.split(",").forEach(pair => {
+              const [k,v] = pair.split("=").map(s=>s.trim());
+              if (k) opts[k]=v||"";
+            });
+          }
+        }
+        return { type, options: opts };
+      }).filter(tr => tr.type);
+    }
+    return d;
+  }).filter((d) => d.name || d.url);
 
   cfg.sync = {
     interval: $("#cfg-sync-interval").value,
@@ -413,10 +668,9 @@ async function loadEvents() {
     } catch (e) { /* ignore */ }
   }
 
-  const destOptions = (cfg ? cfg.sources : [])
-    .map((s) => {
-      const d = s.destination && s.destination.name ? s.destination.name : "";
-      return d ? `<option value="${esc(d)}" ${eventsState.dest === d ? "selected" : ""}>${esc(d)}</option>` : "";
+  const destOptions = (cfg ? cfg.destinations || [] : [])
+    .map((d) => {
+      return d.name ? `<option value="${esc(d.name)}" ${eventsState.dest === d.name ? "selected" : ""}>${esc(d.name)}</option>` : "";
     })
     .join("");
 
@@ -447,7 +701,9 @@ async function loadEvents() {
   const hasNext = (data.events || []).length >= eventsState.limit;
 
   $("#view-events").innerHTML = `
-    <div class="card">
+    <div class="section">
+      <div class="section-header"><h2>Événements synchronisés</h2><span class="hint">Filtre par destination</span></div>
+      <div class="section-body"><div class="card" style="margin:0;box-shadow:none;">
       <div class="toolbar">
         <select id="ev-filter" class="field">
           <option value="">Toutes les destinations</option>
@@ -467,7 +723,8 @@ async function loadEvents() {
           </thead>
           <tbody>${rows || `<tr><td colspan="5" class="empty">Aucun événement</td></tr>`}</tbody>
         </table>
-      </div>
+      </div></div>
+    </div></div>
     </div>`;
 
   $("#ev-filter").addEventListener("change", (e) => {
@@ -517,7 +774,9 @@ async function loadLogs() {
     .join("");
 
   $("#view-logs").innerHTML = `
-    <div class="card">
+    <div class="section">
+      <div class="section-header"><h2>Logs</h2><span class="hint">Flux structuré — filtre par niveau</span></div>
+      <div class="section-body"><div class="card" style="margin:0;box-shadow:none;">
       <div class="toolbar">
         <select id="log-filter" class="field">
           ${["", "debug", "info", "warn", "error"].map((l) => `<option value="${l}" ${logsState.level === l ? "selected" : ""}>${l ? "≥ " + l : "Tous niveaux"}</option>`).join("")}
@@ -533,6 +792,117 @@ async function loadLogs() {
     loadLogs();
   });
   $("#log-refresh").addEventListener("click", loadLogs);
+}
+
+// ---------------------------------------------------------------------------
+// Plugins
+// ---------------------------------------------------------------------------
+
+async function loadPlugins() {
+  let plugins;
+  try {
+    const data = await api("/api/plugins");
+    plugins = data.plugins || [];
+    pluginCache = plugins;
+  } catch (e) {
+    $("#view-plugins").innerHTML = `<div class="card"><div class="empty">Impossible de charger les plugins : ${esc(e.message)}</div></div>`;
+    return;
+  }
+  const byKind = { source: [], destination: [], transformer: [] };
+  plugins.forEach(p => { if (byKind[p.kind]) byKind[p.kind].push(p); });
+  // Fetch installed archives
+  let installed = [];
+  try {
+    const inst = await api("/api/plugins/installed");
+    installed = inst.installed || [];
+  } catch(e) {}
+
+  $("#view-plugins").innerHTML = `
+    <div class="section">
+      <div class="section-header"><h2>Installer un plugin</h2><span class="hint">Upload d'une archive (.zip, .tar.gz) contenant le plugin</span></div>
+      <div class="section-body">
+        <div class="upload-area" id="plugin-drop">
+          <p style="margin-bottom:8px;">Glissez-déposez une archive ici ou</p>
+          <input type="file" id="plugin-file" accept=".zip,.tar,.tar.gz,.tgz,.gz" style="display:none">
+          <button class="btn btn-outline" id="btn-pick-plugin">Choisir un fichier</button>
+          <button class="btn btn-primary" id="btn-upload-plugin" style="margin-left:8px;">Uploader</button>
+          <div id="upload-status" class="hint" style="margin-top:8px;"></div>
+        </div>
+        <div class="card"><h3>Archives installées</h3>
+          ${installed.length ? `<table><thead><tr><th>Fichier</th><th>Taille</th><th>Date</th></tr></thead><tbody>${installed.map(f=>`<tr><td class="mono">${esc(f.name)}</td><td>${f.size} o</td><td>${esc(f.mod)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">Aucune archive installée — les plugins intégrés sont ci-dessous</div>`}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h2>Connecteurs Source</h2><span class="hint">SourceConnector — type à sélectionner dans chaque source</span></div>
+      <div class="section-body">
+        ${byKind.source.map(p=>`<div class="card"><h3>${esc(p.type)} — ${esc(p.name)}</h3><p style="color:var(--text-secondary)">${esc(p.description)}</p><span class="badge ok">${esc(p.kind)}</span></div>`).join("") || `<div class="card"><div class="empty">Aucun connecteur source</div></div>`}
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h2>Connecteurs Destination</h2><span class="hint">DestinationConnector</span></div>
+      <div class="section-body">
+        ${byKind.destination.map(p=>`<div class="card"><h3>${esc(p.type)} — ${esc(p.name)}</h3><p style="color:var(--text-secondary)">${esc(p.description)}</p><span class="badge ok">${esc(p.kind)}</span></div>`).join("") || `<div class="card"><div class="empty">Aucun connecteur destination</div></div>`}
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h2>Transformers</h2><span class="hint">Pipeline — configuré par destination/source</span></div>
+      <div class="section-body">
+        ${byKind.transformer.map(p=>`<div class="card"><h3>${esc(p.type)} — ${esc(p.name)}</h3><p style="color:var(--text-secondary)">${esc(p.description)}</p><span class="badge ok">${esc(p.kind)}</span></div>`).join("") || `<div class="card"><div class="empty">Aucun transformer</div></div>`}
+      </div>
+    </div>
+  `;
+  // Wire upload
+  const pickBtn = $("#btn-pick-plugin");
+  const fileInput = $("#plugin-file");
+  const uploadBtn = $("#btn-upload-plugin");
+  const statusEl = $("#upload-status");
+  const dropArea = $("#plugin-drop");
+  if (pickBtn && fileInput) {
+    pickBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) statusEl.textContent = "Fichier sélectionné: " + fileInput.files[0].name;
+    });
+    if (dropArea) {
+      dropArea.addEventListener("dragover", (e) => { e.preventDefault(); dropArea.classList.add("dragover"); });
+      dropArea.addEventListener("dragleave", () => dropArea.classList.remove("dragover"));
+      dropArea.addEventListener("drop", (e) => {
+        e.preventDefault(); dropArea.classList.remove("dragover");
+        if (e.dataTransfer.files.length) {
+          fileInput.files = e.dataTransfer.files;
+          statusEl.textContent = "Fichier sélectionné: " + fileInput.files[0].name;
+        }
+      });
+    }
+  }
+  if (uploadBtn && fileInput) {
+    uploadBtn.addEventListener("click", async () => {
+      if (!fileInput.files.length) { snack("Sélectionnez d'abord une archive", true); return; }
+      const fd = new FormData();
+      fd.append("archive", fileInput.files[0]);
+      uploadBtn.disabled = true;
+      statusEl.textContent = "Upload en cours...";
+      try {
+        const headers = {};
+        if (token) headers["Authorization"] = "Bearer " + token;
+        const res = await fetch("/api/plugins/upload", { method: "POST", headers, body: fd });
+        const data = await res.json().catch(()=>({}));
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        snack("Plugin installé: " + data.filename);
+        statusEl.textContent = "Installé: " + data.filename;
+        setTimeout(loadPlugins, 800);
+      } catch(e) {
+        snack("Échec upload: " + e.message, true);
+        statusEl.textContent = "Erreur: " + e.message;
+      } finally {
+        uploadBtn.disabled = false;
+      }
+    });
+  }
+
 }
 
 // ---------------------------------------------------------------------------

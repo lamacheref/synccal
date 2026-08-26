@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -530,4 +531,58 @@ func TestPluginUploadInvalidMultipart(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req2)
 	assert.Equal(t, http.StatusBadRequest, rec2.Code)
+}
+
+func TestWriteJSONEncodeError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	// channel : non sérialisable en JSON → branche d'erreur de writeJSON
+	writeJSON(rec, http.StatusOK, make(chan int))
+	assert.Equal(t, http.StatusOK, rec.Code) // header déjà écrit, corps vide
+}
+
+func TestHandleConfigMethodNotAllowed(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	handler := s.Handler()
+
+	// Méthode interdite sur /api/config
+	rec := doRequest(t, handler, http.MethodDelete, "/api/config", "", "")
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestApplyConfigInvalidJSON(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	handler := s.Handler()
+
+	rec := doRequest(t, handler, http.MethodPut, "/api/config", "{invalid json", "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestApplyConfigRebuildFailure(t *testing.T) {
+	// Serveur dont le rebuild échoue
+	cfg := &config.Config{
+		Sources: []config.SourceConfig{{Name: "src1", Type: "caldav", URL: "https://example.com/cal.ics"}},
+		Destinations: []config.DestinationConfig{{
+			Name: "dest1", Type: "caldav", URL: "https://dest.example.com/",
+			Username: "u", Password: "p", Source: "src1",
+		}},
+		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "t.db")},
+		Sync:     config.SyncConfig{Interval: "0", Timeout: "5s", DeleteMode: "soft"},
+		Metrics:  config.MetricsConfig{Addr: ":0"},
+		Web:      config.WebConfig{Addr: ":0"},
+		Logging:  config.LoggingConfig{Level: "error", Format: "json"},
+	}
+	store, err := storage.New(cfg.Database.Path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+
+	holder := NewSyncerHolder(&fakeSyncer{})
+	logs := NewLogStore(10)
+	failRebuild := func(*config.Config) (Syncer, error) { return nil, errors.New("rebuild boom") }
+	s := New(cfg, filepath.Join(t.TempDir(), "cfg.yaml"), store, logs, holder, failRebuild, zap.NewNop().Sugar())
+	handler := s.Handler()
+
+	payload := `{"sync": {"interval": "30m"}}`
+	rec := doRequest(t, handler, http.MethodPut, "/api/config", payload, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "rebuild boom")
 }

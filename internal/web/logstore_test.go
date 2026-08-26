@@ -26,3 +26,17 @@ func TestLogStoreSyncAndLimit(t *testing.T) {
 	// Sync ne panique pas
 	assert.NotPanics(t, func() { _ = ls.List("", 1) })
 }
+
+func TestLogCoreSyncAndCheckDisabled(t *testing.T) {
+	ls := NewLogStore(10)
+	core := ls.Core(zap.NewNop().Core())
+
+	// Sync délègue au writer (zap Nop → nil error)
+	lc, ok := core.(*logCore)
+	require.True(t, ok)
+	require.NoError(t, lc.Sync())
+
+	// Sync sans writer
+	bare := &logCore{store: ls, level: zapcore.DebugLevel}
+	require.NoError(t, bare.Sync())
+}

@@ -293,3 +293,10 @@ func TestToPluginStateNil(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Empty(t, out.CTag)
 }
+
+func TestCaldavSourceFetchError(t *testing.T) {
+	bad, err := NewSource(SourceConfig{Type: "caldav", URL: "http://127.0.0.1:1/dav/", Username: "u", Password: "p"})
+	require.NoError(t, err)
+	_, _, ferr := bad.Fetch(context.Background(), "")
+	assert.Error(t, ferr)
+}

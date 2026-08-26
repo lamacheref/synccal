@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-ical"
 	"github.com/smiden/synccal/internal/config"
@@ -506,4 +507,59 @@ func TestNew_UnknownTransformerWarns(t *testing.T) {
 	// Le pipeline existe malgré le transformer inconnu (warn + skip)
 	require.NotNil(t, s.pipelines[0])
 	require.NoError(t, s.Sync(context.Background()))
+}
+
+func TestStartScheduler_JobExecutes(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.cfg.Sync.Interval = "20ms"
+	env.cfg.Sync.Timeout = "500ms"
+	s := env.syncer
+
+	s.StartScheduler()
+	require.NotNil(t, s.scheduler)
+	defer s.Stop()
+
+	// Attendre au moins deux ticks du cron
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if env.source.callsChange >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.GreaterOrEqual(t, env.source.callsChange, 2,
+		"la closure planifiée doit exécuter Sync à chaque tick")
+}
+
+func TestNew_SourceTransformersPipeline(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Transformers déclarés côté source, dont prefix-uid sans option (injection auto du hash)
+	env.cfg.Sources[0].Transformers = []config.TransformerConfig{
+		{Type: "filter-private"},
+		{Type: "prefix-uid"}, // opts vides → injection du préfixe source
+		{Type: "prefix-summary", Options: map[string]string{"prefix": "[S]"}},
+	}
+	s := New(env.cfg,
+		[]plugin.SourceConnector{env.source},
+		[]plugin.DestinationConnector{env.dest}, env.store, zap.NewNop().Sugar())
+	require.NotNil(t, s.pipelines[0])
+
+	env.source.data = []byte(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//EN
+BEGIN:VEVENT
+UID:pipe@example.com
+DTSTAMP:20240101T000000Z
+DTSTART:20240115T100000Z
+SUMMARY:Toto
+END:VEVENT
+END:VCALENDAR`)
+	require.NoError(t, s.Sync(context.Background()))
+	require.Len(t, env.dest.created, 1)
+	var ics string
+	for _, v := range env.dest.events {
+		ics = string(v)
+	}
+	assert.Contains(t, ics, "[S]Toto", "transformer source appliqué")
+	assert.Contains(t, ics, sourcePrefix(srcURL)+"-pipe@", "préfixe UID injecté")
 }

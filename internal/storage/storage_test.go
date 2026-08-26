@@ -163,3 +163,10 @@ func TestStore_MultipleDestinationsIsolation(t *testing.T) {
 	assert.Equal(t, "h1", m1["uid1"])
 	assert.Equal(t, "h2", m2["uid1"])
 }
+
+func TestNew_PingError(t *testing.T) {
+	// Ouvrir un répertoire comme DB : sql.Open OK mais Ping échoue
+	dir := t.TempDir()
+	_, err := New(dir)
+	assert.Error(t, err, "un répertoire ne peut pas servir de base SQLite")
+}

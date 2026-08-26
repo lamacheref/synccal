@@ -112,6 +112,43 @@ web:
 > 🔐 **Sécurité** : privilégiez toujours un **token d'application** plutôt qu'un mot de passe de compte (Nextcloud et Carbonio le supportent).
 > **Compatibilité** : l'ancien format `sources[].destination` est automatiquement migré vers `destinations[]` (avec `source: <nom>`).
 
+### Variables d'environnement
+
+En mode conteneur, deux mécanismes :
+
+**1. Surcharge ponctuelle** — toute variable `SYNCCAL_<CHEMIN>` écrase la valeur du `config.yaml`
+(champs en majuscules, `_` séparateur, index numériques pour les listes ; valeur vide = ignorée) :
+
+```bash
+SYNCCAL_WEB_TOKEN=mon-token          # web.token
+SYNCCAL_SYNC_INTERVAL=30m            # sync.interval
+SYNCCAL_SYNC_FILTER_PRIVATE=true     # sync.filter_private
+SYNCCAL_DESTINATIONS_0_PASSWORD=x    # destinations[0].password
+```
+
+**2. Remplacement total** — `SYNCCAL_CONFIG` contient le YAML complet et remplace le fichier :
+
+```yaml
+# docker-compose.yml
+environment:
+  SYNCCAL_CONFIG: |
+    sources:
+      - name: feries
+        type: caldav
+        url: https://example.com/cal.ics
+    destinations:
+      - name: perso
+        type: caldav
+        url: https://cloud.example.com/remote.php/dav/calendars/user/personal/
+        username: user
+        password: app-password
+        source: feries
+    database:
+      path: /app/data/synccal.db
+    sync:
+      interval: 1h
+```
+
 ### Docker
 
 ```bash

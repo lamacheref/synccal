@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/viper"
@@ -82,13 +84,26 @@ type LoggingConfig struct {
 	Format string `mapstructure:"format" yaml:"format"`
 }
 
+// Load lit la configuration depuis SYNCCAL_CONFIG (YAML inline, prioritaire,
+// pratique en conteneur) ou depuis le fichier `path`, puis applique les
+// surcharges par variables d'environnement SYNCCAL_* (voir env.go).
 func Load(path string) (*Config, error) {
-	v := viper.New()
-	v.SetConfigFile(path)
-	v.SetConfigType("yaml")
-	v.AutomaticEnv()
+	if inline, ok := loadFromEnv(); ok {
+		return parse(inline)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parse(data)
+}
 
-	if err := v.ReadInConfig(); err != nil {
+// parse décode un YAML de configuration, applique défauts, migration legacy,
+// surcharges d'environnement puis validation.
+func parse(data []byte) (*Config, error) {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
 		return nil, err
 	}
 
@@ -99,6 +114,11 @@ func Load(path string) (*Config, error) {
 
 	setDefaults(&cfg)
 	migrateLegacy(&cfg)
+
+	// Les variables SYNCCAL_* surchargent le fichier (valeurs vides ignorées)
+	if err := applyEnvOverrides(&cfg); err != nil {
+		return nil, err
+	}
 
 	if err := Validate(&cfg); err != nil {
 		return nil, err

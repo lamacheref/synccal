@@ -66,6 +66,8 @@ jobs:
     needs: lint-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'lamacheref/synccal'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # création et push du tag
     outputs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
@@ -80,13 +82,17 @@ jobs:
         run: |
           python3 scripts/bump_version.py
 
-      - name: Create & push tag to GitHub
+      - name: Create & push tag to lamacheref/synccal
         if: steps.bump.outputs.version != '0.0.0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Cible explicite : dépôt officiel (origin y pointe déjà via checkout)
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/lamacheref/synccal.git"
           git tag ${{ steps.bump.outputs.tag }}
-          git push github ${{ steps.bump.outputs.tag }}
+          git push origin ${{ steps.bump.outputs.tag }}
 
   # ============================================================
   # Build & Push Docker Image

@@ -166,3 +166,109 @@ func TestParseRetryAfter_HTTPDate(t *testing.T) {
 	assert.True(t, d > 0)
 	assert.True(t, d <= 11*time.Second)
 }
+
+func TestDoWithRetryAfter_Seconds(t *testing.T) {
+	cfg := DefaultConfig()
+	attempts := 0
+	err := DoWithRetryAfter(context.Background(), cfg, func() (*http.Response, error) {
+		attempts++
+		if attempts < 2 {
+			return &http.Response{StatusCode: 503, Header: http.Header{"Retry-After": []string{"0"}}}, nil
+		}
+		return &http.Response{StatusCode: 200}, nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, attempts)
+}
+
+func TestDoWithRetryAfter_HTTPDate(t *testing.T) {
+	cfg := Config{MaxAttempts: 2, BaseDelay: time.Millisecond, RetryableStatus: []int{503}}
+	attempts := 0
+	err := DoWithRetryAfter(context.Background(), cfg, func() (*http.Response, error) {
+		attempts++
+		if attempts < 2 {
+			h := http.Header{"Retry-After": []string{time.Now().UTC().Add(time.Second).Format(http.TimeFormat)}}
+			return &http.Response{StatusCode: 503, Header: h}, nil
+		}
+		return &http.Response{StatusCode: 200}, nil
+	})
+	assert.NoError(t, err)
+}
+
+func TestDoWithRetryAfter_NonRetryable(t *testing.T) {
+	cfg := DefaultConfig()
+	attempts := 0
+	err := DoWithRetryAfter(context.Background(), cfg, func() (*http.Response, error) {
+		attempts++
+		return &http.Response{StatusCode: 404}, nil
+	})
+	assert.Error(t, err)
+	assert.Equal(t, 1, attempts)
+}
+
+func TestDoWithRetryAfter_TransportError(t *testing.T) {
+	cfg := Config{MaxAttempts: 1, BaseDelay: time.Millisecond}
+	err := DoWithRetryAfter(context.Background(), cfg, func() (*http.Response, error) {
+		return nil, errors.New("boom")
+	})
+	assert.Error(t, err)
+}
+
+func TestParseRetryAfter_Invalid(t *testing.T) {
+	r := &http.Response{Header: http.Header{"Retry-After": []string{"garbage"}}}
+	assert.Equal(t, time.Duration(0), parseRetryAfter(r))
+	r2 := &http.Response{Header: http.Header{}}
+	assert.Equal(t, time.Duration(0), parseRetryAfter(r2))
+}
+
+func TestIsErrorRetryable_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := DefaultConfig()
+	assert.False(t, isRetryable(ctx.Err(), cfg))
+	assert.True(t, isRetryable(errors.New("other"), cfg))
+}
+
+func TestStatusErrorAndHelpers(t *testing.T) {
+	e := &statusError{status: 429}
+	assert.Equal(t, "HTTP status 429", e.Error())
+	assert.True(t, isStatusRetryable(429, DefaultConfig()))
+	assert.False(t, isStatusRetryable(404, DefaultConfig()))
+
+	// isErrorRetryable délègue à isRetryable
+	assert.True(t, isErrorRetryable(errors.New("x"), DefaultConfig()))
+
+	// RetryableFunc.Do + WithConfig
+	called := 0
+	fn := RetryableFunc(func() error { called++; return nil })
+	assert.NoError(t, fn.Do(context.Background(), DefaultConfig()))
+	assert.Equal(t, 1, called)
+
+	var got int
+	wc := WithConfig(DefaultConfig())
+	_ = wc() // retourne toujours nil
+	_ = got
+
+	// Do avec erreur non retryable via RetryableErrors
+	cfg2 := DefaultConfig()
+	cfg2.RetryableErrors = []error{errors.New("fatal")}
+	n := 0
+	err := Do(context.Background(), cfg2, func() error { n++; return errors.New("fatal") })
+	assert.Error(t, err)
+	assert.Equal(t, 1, n)
+
+	// Do : épuise les tentatives sur erreur retryable
+	cfg3 := Config{MaxAttempts: 2, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 1, JitterFactor: 0}
+	m := 0
+	err = Do(context.Background(), cfg3, func() error { m++; return errors.New("transient") })
+	assert.Error(t, err)
+	assert.Equal(t, 2, m)
+
+	// Do : ctx annulé pendant l'attente
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg4 := Config{MaxAttempts: 3, BaseDelay: time.Hour, Multiplier: 1, JitterFactor: 0}
+	go func() { time.Sleep(10 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_ = Do(ctx, cfg4, func() error { return errors.New("retry me") })
+	assert.Less(t, time.Since(start), time.Minute)
+}

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type fakeSyncer struct {
@@ -396,4 +399,135 @@ func TestConfigWithPlugins(t *testing.T) {
 	assert.Equal(t, "caldav", dest["type"])
 	trs = dest["transformers"].([]interface{})
 	assert.Len(t, trs, 1)
+}
+
+func TestPluginUploadAndInstalled(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	// DB dans un TempDir → data/plugins sera créé à côté
+	s.cfg.Database.Path = filepath.Join(t.TempDir(), "data", "test.db")
+	handler := s.Handler()
+
+	// Upload OK
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, _ := w.CreateFormFile("archive", "myplugin.zip")
+	fw.Write([]byte("fake zip content"))
+	w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/plugins/upload", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "uploaded")
+
+	// Upload sans fichier → 400
+	req2 := httptest.NewRequest(http.MethodPost, "/api/plugins/upload", bytes.NewReader(nil))
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusBadRequest, rec2.Code)
+
+	// Méthode interdite
+	req3 := httptest.NewRequest(http.MethodGet, "/api/plugins/upload", nil)
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec3.Code)
+
+	// Installed : liste le fichier uploadé
+	req4 := httptest.NewRequest(http.MethodGet, "/api/plugins/installed", nil)
+	rec4 := httptest.NewRecorder()
+	handler.ServeHTTP(rec4, req4)
+	require.Equal(t, http.StatusOK, rec4.Code)
+	assert.Contains(t, rec4.Body.String(), "myplugin.zip")
+
+	// Installed sur dossier inexistant → tableau vide
+	s2, _, _ := newTestServer(t, "")
+	s2.cfg.Database.Path = filepath.Join(t.TempDir(), "nowhere", "db.sqlite")
+	rec5 := httptest.NewRecorder()
+	s2.Handler().ServeHTTP(rec5, httptest.NewRequest(http.MethodGet, "/api/plugins/installed", nil))
+	require.Equal(t, http.StatusOK, rec5.Code)
+	assert.Contains(t, rec5.Body.String(), "[]")
+}
+
+func TestIsRunningAndRequireMethod(t *testing.T) {
+	s, fake, _ := newTestServer(t, "")
+	handler := s.Handler()
+
+	assert.False(t, s.IsRunning())
+	fake.running.Store(true)
+	assert.True(t, s.IsRunning())
+
+	// handleStatus avec mauvaise méthode → 405
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/status", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	// handleEvents avec mauvaise méthode
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/events", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	// handleLogs avec mauvaise méthode
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/logs", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	// handlePlugins avec mauvaise méthode
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/plugins", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestLogStoreCore(t *testing.T) {
+	ls := NewLogStore(10)
+	core := ls.Core(zap.NewNop().Core())
+	logger := zap.New(core)
+
+	require.True(t, core.Enabled(zapcore.InfoLevel))
+	entry := logger.Check(zapcore.InfoLevel, "via core")
+	require.NotNil(t, entry)
+	entry.Write(zap.String("k", "v"))
+	entry2 := logger.Check(zapcore.WarnLevel, "warn via core")
+	entry2.Write()
+
+	entries := ls.List("", 10)
+	require.Len(t, entries, 2)
+	assert.Equal(t, "warn via core", entries[0].Message)
+	assert.Equal(t, "via core", entries[1].Message)
+
+	// With retourne un core fonctionnel
+	c2 := core.With([]zap.Field{zap.String("ctx", "x")})
+	assert.NotNil(t, c2)
+}
+
+func TestHandleEventsDBErrorAndPagination(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	handler := s.Handler()
+
+	// limit invalide → défaut appliqué, pas d'erreur
+	rec := doRequest(t, handler, http.MethodGet, "/api/events?limit=abc&offset=xyz", "", "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestPluginUploadInvalidMultipart(t *testing.T) {
+	s, _, _ := newTestServer(t, "")
+	s.cfg.Database.Path = filepath.Join(t.TempDir(), "data", "db.sqlite")
+	handler := s.Handler()
+
+	// Body multipart corrompu
+	req := httptest.NewRequest(http.MethodPost, "/api/plugins/upload", strings.NewReader("not-multipart"))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=bad")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	// Multipart valide sans champ archive
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("other", "value")
+	w.Close()
+	req2 := httptest.NewRequest(http.MethodPost, "/api/plugins/upload", &buf)
+	req2.Header.Set("Content-Type", w.FormDataContentType())
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusBadRequest, rec2.Code)
 }

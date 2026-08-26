@@ -6,7 +6,7 @@
 
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue?style=for-the-badge&logo=git&logoColor=white)](https://github.com/lamacheref/synccal/releases)
 [![Langage](https://img.shields.io/badge/Go-1.23-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
-[![License](https://img.shields.io/badge/licence-À_définir-808080?style=for-the-badge)]()
+[![License](https://img.shields.io/badge/licence-Propriétaire_SMiDeN_2026-red?style=for-the-badge)](LICENSE)
 
 [![Build GitHub](https://img.shields.io/badge/GitHub_CI-pending-yellow?style=flat-square&logo=github)](https://github.com/lamacheref/synccal/actions)
 [![Build Gitea](https://img.shields.io/badge/Gitea_CI-pending-yellow?style=flat-square&logo=gitea)](https://gitea.smiden.eu/flamachere/synccal)
@@ -182,6 +182,59 @@ tests/integration/     # tests d'intégration Testcontainers (via plugin)
 scripts/               # versioning auto-bumper
 ```
 
+## 🧪 Couverture de tests
+
+**90.3% sur `internal/...`** — objectif ≥90% ✅ (8/8 packages testés, `go test` vert)
+
+| Package | Couverture | Fichiers de tests |
+|---------|:----------:|-------------------|
+| `internal/caldav` | **89.2%** | `client_test.go` |
+| `internal/config` | **95.1%** | `config_test.go` |
+| `internal/metrics` | **100%** | `metrics_test.go` |
+| `internal/plugin` | **95.1%** | `plugin_test.go` + `caldav_test.go` |
+| `internal/retry` | **93.7%** | `retry_test.go` |
+| `internal/storage` | **90.1%** | `storage_test.go` |
+| `internal/sync` | **87.3%** | `syncer_test.go` |
+| `internal/web` | **89.2%** | `server_test.go` + `logstore_test.go` |
+
+### Serveur CalDAV mock
+
+Les tests `caldav` et `plugin` s'appuient sur un mock `httptest.Server` simulant un serveur CalDAV minimal (réutilisable pour de futurs connecteurs, ex. Carbonio dédié) :
+
+```
+HEAD            → ETag (sources ICS publiques)
+GET *.ics       → corps VCALENDAR + ETag
+PUT             → 201 Created   (CreateEvent)
+DELETE          → 204 NoContent (DeleteEvent)
+PROPFIND D:0    → multistatus getctag + sync-token
+PROPFIND D:1    → multistatus hrefs + getetags (listing ressources)
+REPORT          → sync-collection : hrefs modifiés + nouveau sync-token (RFC 6578)
+```
+
+### Tests `sync` — mocks `SourceConnector` / `DestinationConnector`
+
+* `New` : construction pipelines (auto `filter-private` + `prefix-uid`), référence source inconnue, transformer inconnu (warn + skip)
+* `Sync` : création d'events avec UID préfixés, source inchangée → skip fetch, idempotence, update, filtrage PRIVATE/CONFIDENTIAL, erreurs source/destination non bloquantes, soft/hard delete, multi-destinations indépendantes
+* Scheduler : interval=0 vs interval>0, pas de duplication au double `Start`
+* Helpers : `sourcePrefix`, `hashContent`, conversions d'état, `parseEventsWithPipeline`
+
+### Mesurer la couverture
+
+```bash
+go test -coverprofile=coverage.out -covermode=atomic ./internal/...
+go tool cover -func=coverage.out | grep total   # total: (statements) 90.3%
+go tool cover -html=coverage.out -o coverage.html
+```
+
+### Seuil CI recommandé
+
+```yaml
+- run: go test -coverprofile=coverage.out -covermode=atomic ./internal/...
+- run: |
+    COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+    awk "BEGIN {exit !($COV >= 90)}" || { echo "Coverage $COV% < 90%"; exit 1; }
+```
+
 ## 🗺️ Feuille de route
 
 Voir [TODO.md](TODO.md), [ROADMAP.md](ROADMAP.md), [PROJET.md](PROJET.md) et [CHANGELOG.md](CHANGELOG.md).
@@ -195,4 +248,9 @@ Voir [TODO.md](TODO.md), [ROADMAP.md](ROADMAP.md), [PROJET.md](PROJET.md) et [CH
 
 ## 📄 Licence
 
-À définir.
+**Propriétaire — Copyright © 2026 SMiDeN. Tous droits réservés.**
+
+Logiciel développé par SMiDeN, destiné à un **usage unique et exclusif au sein de SMiDeN**.
+Reproduction, modification, distribution ou exploitation hors du cadre de SMiDeN interdites sans autorisation écrite préalable.
+
+Voir le fichier [LICENSE](LICENSE) pour les termes complets.

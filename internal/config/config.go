@@ -179,6 +179,9 @@ func migrateLegacy(cfg *Config) {
 		}
 		d := s.Destination
 		d.Source = s.Name
+		if d.Type == "" {
+			d.Type = "caldav"
+		}
 		dests = append(dests, d)
 	}
 	cfg.Destinations = dests

@@ -1,0 +1,33 @@
+sources:
+  - name: "public-ics"
+    type: "caldav"
+    url: "http://localhost:8083/calendar.ics"
+
+destinations:
+  - name: "nextcloud-dest"
+    type: "caldav"
+    url: "http://localhost:8082/remote.php/dav/calendars/admin/personal/"
+    username: "admin"
+    password: "admin"
+    source: "public-ics"
+
+database:
+  path: "./data/synccal.db"
+
+sync:
+  interval: "1h"
+  timeout: "30s"
+  batch_size: 100
+  delete_mode: "soft"
+  filter_private: true
+
+metrics:
+  addr: ":8080"
+
+web:
+  addr: ":8080"
+  token: "dev-token"
+
+logging:
+  level: "debug"
+  format: "console"

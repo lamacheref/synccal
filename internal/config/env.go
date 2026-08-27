@@ -3,147 +3,149 @@ package config
 import (
 	"fmt"
 	"os"
-	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 )
 
-// envPrefix est le préfixe des variables d'environnement de surcharge.
+// envPrefix est le préfixe des variables d'environnement de configuration.
 const envPrefix = "SYNCCAL"
 
-// applyEnvOverrides écrase les valeurs de la configuration avec les variables
-// d'environnement SYNCCAL_* correspondantes.
-//
-// La clé est le chemin du champ dans la structure : majuscules, séparateur `_`.
-// Exemples :
-//
-//	SYNCCAL_WEB_TOKEN=secret              -> web.token
-//	SYNCCAL_SYNC_INTERVAL=30m             -> sync.interval
-//	SYNCCAL_DATABASE_PATH=/data/db.sqlite -> database.path
-//	SYNCCAL_DESTINATIONS_0_PASSWORD=token -> destinations[0].password
-//
-// Les valeurs vides sont ignorées (une variable définie mais vide ne masque
-// pas la valeur du fichier). Les champs de type map ne sont pas surchargeables.
-func applyEnvOverrides(cfg *Config) error {
-	return applyEnvRecursive(reflect.ValueOf(cfg).Elem(), envPrefix)
-}
+// envConfigVar désigne le nom de la variable contenant le YAML inline complet.
+const envConfigVar = envPrefix + "_CONFIG"
 
-func applyEnvRecursive(v reflect.Value, prefix string) error {
-	if v.Kind() == reflect.Ptr {
-		if v.IsNil() {
-			return nil
-		}
-		v = v.Elem()
+// buildEnvTree transforme les variables SYNCCAL_* en arbre YAML natif
+// (maps Go et listes []any).
+//
+// Chaque segment (séparé par `_`) est une clé de map ; un segment numérique
+// est un index de liste. Exemples :
+//
+//	SYNCCAL_WEB_TOKEN=secret                            -> web.token
+//	SYNCCAL_SYNC_INTERVAL=30m                           -> sync.interval
+//	SYNCCAL_DESTINATIONS_0_PASSWORD=token               -> destinations[0].password
+//	SYNCCAL_DESTINATIONS_0_TRANSFORMERS_0_TYPE=f        -> destinations[0].transformers[0].type
+//	SYNCCAL_DESTINATIONS_0_TRANSFORMERS_0_OPTIONS_PREFIX=x -> ...options.prefix
+//
+// Les valeurs vides sont ignorées.
+func buildEnvTree() (map[string]any, error) {
+	tree := make(map[string]any)
+	names := make([]string, 0)
+	for _, kv := range os.Environ() {
+		names = append(names, strings.SplitN(kv, "=", 2)[0])
 	}
-	if v.Kind() != reflect.Struct {
-		return fmt.Errorf("type non supporté pour %s: %s", prefix, v.Kind())
-	}
-
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if !field.IsExported() {
+	sort.Strings(names)
+	for _, name := range names {
+		if !strings.HasPrefix(name, envPrefix+"_") || name == envConfigVar {
 			continue
 		}
-		key := envKeyFor(field)
-		if key == "" {
+		val := os.Getenv(name)
+		if val == "" {
 			continue
 		}
-		full := prefix + "_" + key
-
-		fv := v.Field(i)
-		switch fv.Kind() {
-		case reflect.Struct:
-			if err := applyEnvRecursive(fv, full); err != nil {
-				return err
-			}
-		case reflect.Slice:
-			if err := applyEnvSlice(fv, full); err != nil {
-				return err
-			}
-		case reflect.Map:
-			// options libres (transformer.options) : pas de surcharge env
-		default:
-			val, ok := os.LookupEnv(full)
-			if !ok || val == "" {
-				continue
-			}
-			if err := setScalar(fv, val); err != nil {
-				return fmt.Errorf("%s: %w", full, err)
-			}
+		segs := strings.Split(strings.TrimPrefix(name, envPrefix+"_"), "_")
+		if err := insertPath(tree, segs, val); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	return nil
+	return tree, nil
 }
 
-// applyEnvSibling permet la surcharge des éléments existants d'une liste :
-// SYNCCAL_DESTINATIONS_0_PASSWORD écrase destinations[0].password si l'entrée
-// existe déjà dans le fichier (créer des entrées se fait via le YAML/UI).
-func applyEnvSlice(v reflect.Value, prefix string) error {
-	if v.Type().Elem().Kind() != reflect.Struct {
-		return nil // listes de scalaires : non géré
+// insertPath insère une valeur au chemin donné. Quand le segment suivant est
+// numérique, la clé courante devient une liste (élément créé si nécessaire).
+func insertPath(node map[string]any, segs []string, val string) error {
+	seg := segs[0]
+	if len(segs) == 1 {
+		if _, err := strconv.Atoi(seg); err != nil {
+			seg = strings.ToLower(seg)
+		}
+		node[seg] = val
+		return nil
 	}
-	for i := 0; i < v.Len(); i++ {
-		if err := applyEnvRecursive(v.Index(i), prefix+"_"+strconv.Itoa(i)); err != nil {
+	if idx, err := strconv.Atoi(segs[1]); err == nil {
+		seg = strings.ToLower(seg)
+		list, ok := node[seg].([]any)
+		if !ok {
+			list = make([]any, 0, idx+1)
+		}
+		for len(list) <= idx {
+			list = append(list, map[string]any{})
+		}
+		child := list[idx].(map[string]any)
+		if err := insertPath(child, segs[2:], val); err != nil {
 			return err
 		}
+		node[seg] = list
+		return nil
 	}
-	return nil
+	seg = strings.ToLower(seg)
+	child, ok := node[seg].(map[string]any)
+	if !ok {
+		child = make(map[string]any)
+		node[seg] = child
+	}
+	return insertPath(child, segs[1:], val)
 }
 
-// envKeyFor déduit le nom de variable à partir du tag mapstructure/yaml.
-func envKeyFor(field reflect.StructField) string {
-	tag := field.Tag.Get("mapstructure")
-	if tag == "" {
-		tag = field.Tag.Get("yaml")
+// hasSynccalEnv indique si au moins une variable SYNCCAL_* (hors CONFIG) existe.
+func hasSynccalEnv() bool {
+	for _, kv := range os.Environ() {
+		name := strings.SplitN(kv, "=", 2)[0]
+		if strings.HasPrefix(name, envPrefix+"_") && name != envConfigVar && os.Getenv(name) != "" {
+			return true
+		}
 	}
-	name := strings.Split(tag, ",")[0]
-	if name == "" || name == "-" {
-		return ""
-	}
-	return strings.ToUpper(name)
+	return false
 }
 
-// setScalar convertit une chaîne d'environnement vers le type du champ.
-func setScalar(field reflect.Value, val string) error {
-	switch field.Kind() {
-	case reflect.String:
-		field.SetString(val)
-	case reflect.Bool:
-		b, err := strconv.ParseBool(val)
-		if err != nil {
-			return fmt.Errorf("bool invalide %q", val)
-		}
-		field.SetBool(b)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, err := strconv.ParseInt(val, 10, 64)
-		if err != nil {
-			return fmt.Errorf("entier invalide %q", val)
-		}
-		field.SetInt(n)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		n, err := strconv.ParseUint(val, 10, 64)
-		if err != nil {
-			return fmt.Errorf("entier non signé invalide %q", val)
-		}
-		field.SetUint(n)
-	case reflect.Float32, reflect.Float64:
-		f, err := strconv.ParseFloat(val, 64)
-		if err != nil {
-			return fmt.Errorf("flottant invalide %q", val)
-		}
-		field.SetFloat(f)
-	default:
-		return fmt.Errorf("type non surchargeable: %s", field.Kind())
-	}
-	return nil
-}
-
-// loadFromEnv retourne la configuration inline fournie via SYNCCAL_CONFIG
-// (contenu YAML complet), utilisée à la place du fichier si définie.
+// loadFromEnv retourne le YAML inline fourni via SYNCCAL_CONFIG.
 func loadFromEnv() ([]byte, bool) {
-	if val := os.Getenv("SYNCCAL_CONFIG"); val != "" {
+	if val := os.Getenv(envConfigVar); val != "" {
 		return []byte(val), true
 	}
 	return nil, false
+}
+
+// deepMerge fusionne src dans dst : maps récursivement, listes par index,
+// scalaires écrasés.
+func deepMerge(dst, src map[string]any) {
+	for k, sv := range src {
+		switch sv := sv.(type) {
+		case map[string]any:
+			existing, ok := dst[k].(map[string]any)
+			if !ok {
+				existing = make(map[string]any)
+				dst[k] = existing
+			}
+			deepMerge(existing, sv)
+		case []any:
+			existing, ok := dst[k].([]any)
+			if !ok {
+				existing = nil
+			}
+			dst[k] = mergeLists(existing, sv)
+		default:
+			dst[k] = sv
+		}
+	}
+}
+
+// mergeLists étend dst avec les éléments de src (par index), en fusionnant
+// récursivement les maps qui se recouvrent.
+func mergeLists(dst, src []any) []any {
+	out := make([]any, 0, max(len(dst), len(src)))
+	out = append(out, dst...)
+	for i, sv := range src {
+		if i < len(out) {
+			if dm, ok := out[i].(map[string]any); ok {
+				if sm, sok := sv.(map[string]any); sok {
+					deepMerge(dm, sm)
+					continue
+				}
+			}
+			out[i] = sv
+			continue
+		}
+		out = append(out, sv)
+	}
+	return out
 }

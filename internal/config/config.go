@@ -1,12 +1,11 @@
 package config
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"time"
 
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -84,41 +83,47 @@ type LoggingConfig struct {
 	Format string `mapstructure:"format" yaml:"format"`
 }
 
-// Load lit la configuration depuis SYNCCAL_CONFIG (YAML inline, prioritaire,
-// pratique en conteneur) ou depuis le fichier `path`, puis applique les
-// surcharges par variables d'environnement SYNCCAL_* (voir env.go).
+// Load construit la configuration à partir de trois sources, dans cet ordre
+// de priorité (les suivantes écrasent les précédentes) :
+//
+//  1. le fichier `path` (ou le YAML inline SYNCCAL_CONFIG) ;
+//  2. les variables d'environnement SYNCCAL_* (voir env.go) — permettent de
+//     définir la configuration complète en conteneur, sans aucun fichier YAML.
+//
+// S'il n'y a ni fichier lisible ni variable SYNCCAL_*, une erreur est renvoyée.
 func Load(path string) (*Config, error) {
-	if inline, ok := loadFromEnv(); ok {
-		return parse(inline)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return parse(data)
-}
+	base := make(map[string]any)
 
-// parse décode un YAML de configuration, applique défauts, migration legacy,
-// surcharges d'environnement puis validation.
-func parse(data []byte) (*Config, error) {
-	v := viper.New()
-	v.SetConfigType("yaml")
-	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+	if inline, ok := loadFromEnv(); ok {
+		if err := yaml.Unmarshal(inline, &base); err != nil {
+			return nil, fmt.Errorf("SYNCCAL_CONFIG invalide: %w", err)
+		}
+	} else if data, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(data, &base); err != nil {
+			return nil, fmt.Errorf("fichier de config invalide: %w", err)
+		}
+	} else if !hasSynccalEnv() {
+		return nil, err // fichier absent et aucune env : on remonte l'erreur
+	}
+
+	if tree, err := buildEnvTree(); err != nil {
 		return nil, err
+	} else if len(tree) > 0 {
+		deepMerge(base, tree)
+	}
+
+	data, err := yaml.Marshal(base)
+	if err != nil {
+		return nil, fmt.Errorf("re-sérialisation: %w", err)
 	}
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 
 	setDefaults(&cfg)
 	migrateLegacy(&cfg)
-
-	// Les variables SYNCCAL_* surchargent le fichier (valeurs vides ignorées)
-	if err := applyEnvOverrides(&cfg); err != nil {
-		return nil, err
-	}
 
 	if err := Validate(&cfg); err != nil {
 		return nil, err
